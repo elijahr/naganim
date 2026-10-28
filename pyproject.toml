@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "phyne"
+version = "0.1.0"
+description = "High-performance bidirectional Nim-Python bridge supporting CPython Stable ABI (abi3/abi3t), CFFI, PEP 3118 zero-copy buffers, and lock-free asyncio"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "cffi>=1.16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+phyne = "phyne._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/phyne"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+pythonpath = ["python", "/Users/eek/Development/headerkit"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ""

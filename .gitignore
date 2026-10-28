@@ -1,20 +1,22 @@
+# Vine / Rhizo workspace metadata
+.envrc
 .vine.json
-.rhizo.*
 *.lock
-workspaces/
-.codex/
-__pycache__/
-*.py[cod]
-.venv/
-build/
-dist/
-*.egg-info/
-*.so
-*.dylib
-*.dll
-*.a
-.nimcache/
+.rhizo.*
+
+# Nim build artifacts
 nimcache/
+tests/nim/test_phyne_all
+*.dylib
+*.so
+*.dll
+*.dylib.dSYM/
+
+# Python caches & virtualenvs
+__pycache__/
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
