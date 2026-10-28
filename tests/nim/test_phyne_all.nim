@@ -227,6 +227,8 @@ suite "3. Bidirectional Type Marshaling & Negative Controls":
     expect(PhyneConversionError):
       discard fromPy(pyBool, int64)
     expect(PhyneConversionError):
+      discard fromPy(pyBool, uint64)
+    expect(PhyneConversionError):
       discard fromPy(pyBool, float64)
 
     let pyInt = toPy(1000'i64)
@@ -292,6 +294,23 @@ suite "4. Two-Tier Zero-Copy Buffer Protocol (PinnedBuffer & ScopedSeqBuffer)":
     check sbuf.exportCount == 0
     sbuf.add(5'i64)
     check sbuf.toSeq() == @[1'i64, 2'i64, 3'i64, 4'i64, 5'i64]
+
+    # Export ScopedSeqBuffer directly via toPyMemoryView / toPyRaw and verify exportCount & resize guard
+    let smv = sbuf.toPyMemoryView()
+    check sbuf.exportCount == 1
+    expect(BufferExportedDefect):
+      sbuf.add(6'i64)
+    let smvRelease = smv.getAttr("release")
+    discard callPy(smvRelease)
+    check sbuf.exportCount == 0
+    sbuf.add(6'i64)
+    check sbuf.toSeq() == @[1'i64, 2'i64, 3'i64, 4'i64, 5'i64, 6'i64]
+
+    # Verify mapTypeToPyStub top-level comma splitting for nested Table types
+    const nestedDictStub = mapTypeToPyStub("Table[string, Table[string, int64]]")
+    const tupleValDictStub = mapTypeToPyStub("Table[string, (int64, string)]")
+    check nestedDictStub == "dict[str, dict[str, int]]"
+    check tupleValDictStub == "dict[str, Any]"
 
 suite "5. Dual-Target {.exportpy.} Wrappers & IR Metadata":
   test "C-ABI and PyCFunction wrappers execute and enforce negative controls":

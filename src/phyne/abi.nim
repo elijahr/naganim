@@ -47,6 +47,32 @@ type
     m_clear*: pointer
     m_free*: pointer
 
+  PyObject_FT* {.pure.} = object
+    ob_tid*: uint
+    ob_flags*: uint16
+    ob_mutex*: uint8
+    ob_gc_bits*: uint8
+    ob_ref_local*: uint32
+    ob_ref_shared*: Py_ssize_t
+    ob_type*: pointer
+
+  PyModuleDef_Base_FT* {.pure.} = object
+    ob_base*: PyObject_FT
+    m_init*: pointer
+    m_index*: Py_ssize_t
+    m_copy*: PyObjectPtr
+
+  PyModuleDef_FT* {.pure.} = object
+    m_base*: PyModuleDef_Base_FT
+    m_name*: cstring
+    m_doc*: cstring
+    m_size*: Py_ssize_t
+    m_methods*: ptr PyMethodDef
+    m_slots*: ptr PyModuleDef_Slot
+    m_traverse*: pointer
+    m_clear*: pointer
+    m_free*: pointer
+
   PyType_Slot* {.pure.} = object
     slot*: cint
     pfunc*: pointer
@@ -228,6 +254,20 @@ proc PyFloat_AsDouble*(obj: PyObjectPtr): cdouble {.importc, cdecl, gcsafe, rais
 
 proc PyBool_FromLong*(v: clong): PyObjectPtr {.importc, cdecl, gcsafe, raises: [].}
 proc PyObject_IsTrue*(obj: PyObjectPtr): cint {.importc, cdecl, gcsafe, raises: [].}
+
+proc isFreeThreadedRuntime*(): bool {.inline, gcsafe, raises: [].} =
+  ## Detects at runtime whether the active CPython interpreter uses the 32-byte
+  ## Free-Threaded (PEP 703 / Py_GIL_DISABLED) PyObject header vs the 16-byte
+  ## standard GIL PyObject header.
+  let t = PyBool_FromLong(1)
+  let f = PyBool_FromLong(0)
+  if t.isNil or f.isNil:
+    return false
+  let tWords = cast[ptr UncheckedArray[uint64]](t)
+  let fWords = cast[ptr UncheckedArray[uint64]](f)
+  result = (tWords[3] == fWords[3]) and (tWords[3] != 0'u64)
+  Py_DecRef(t)
+  Py_DecRef(f)
 
 # ---------------------------------------------------------------------------
 # Strings (Unicode) & Bytes

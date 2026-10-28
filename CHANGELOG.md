@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bidirectional Type Marshaling (`src/phyne/conversions.nim`, `src/phyne/marshal.nim`)**:
   - Implemented `toPy` and `fromPy` conversions for integers, floats, booleans, UTF-8 strings, `seq[byte]`, generic `seq[T]`, `Option[T]`, `Table[K, V]`, tuples, and `PyObj`.
 - **Two-Tier PEP 3118 Zero-Copy Buffer Protocol (`src/phyne/buffer.nim`)**:
-  - Added `PinnedBuffer[T]`, `ScopedSeqBuffer[T]`, PEP 3118 `Py_bf_getbuffer` / `Py_bf_releasebuffer` slot callbacks, and `phyne_buf_view_t` C-ABI descriptors for zero-copy `memoryview` and `cffi` `ffi.from_buffer` sharing.
+  - Added `PinnedBuffer[T]`, `ScopedSeqBuffer[T]`, PEP 3118 `Py_bf_getbuffer` / `Py_bf_releasebuffer` slot callbacks (with 32-byte `abi3t` free-threaded `PyObject` header padding, `gBufferTypeObj` dealloc lookup, and atomic `freed` CAS guard on `PinnedBufferHeader`), `toPyRaw` / `toPyMemoryView` support for `ScopedSeqBuffer[T]`, and `phyne_buf_view_t` C-ABI descriptors for zero-copy `memoryview` and `cffi` `ffi.from_buffer` sharing.
 - **`{.exportpy.}` / `{.pyexport.}` Dual-Target Macros (`src/phyne/export_macro.nim`, `src/phyne/macros.nim`)**:
   - Generates both C-ABI `exportc, cdecl, dynlib` entrypoints and `abi3`/`abi3t` `PyCFunction` wrappers plus `.phyne.ir.json` metadata.
 - **Lock-Free `phyne/asyncio` Completion Bridge & `AsyncChannel` (`src/phyne/asyncio.nim`, `python/phyne/asyncio.py`)**:

@@ -6,10 +6,36 @@
 ## - Containers: `seq[T]` (`list`), `Table[K, V]` (`dict`), `Option[T]` (`None` | `T`), `tuple` (`tuple`)
 ## - Opaque handles: `PyObj`, `PyObjectPtr`
 
-import std/[options, tables, typetraits]
+import std/[atomics, options, tables, typetraits]
 import ./abi
 import ./lifecycle
 import ./gc_bridge
+
+var
+  gPyTrueSingleton: Atomic[pointer]
+  gPyFalseSingleton: Atomic[pointer]
+
+proc classifyPyBool(obj: PyObjectPtr): int {.inline, gcsafe, raises: [].} =
+  ## Returns 1 if `obj` is `Py_True`, 0 if `obj` is `Py_False`, or -1 otherwise.
+  ## Caches the immortal singleton pointers so repeated calls perform zero C-API refcount traffic.
+  var t = cast[PyObjectPtr](gPyTrueSingleton.load(moAcquire))
+  var f = cast[PyObjectPtr](gPyFalseSingleton.load(moAcquire))
+  if unlikely(t.isNil or f.isNil):
+    let newT = PyBool_FromLong(1)
+    let newF = PyBool_FromLong(0)
+    if not newT.isNil:
+      gPyTrueSingleton.store(cast[pointer](newT), moRelease)
+      Py_DecRef(newT)
+      t = newT
+    if not newF.isNil:
+      gPyFalseSingleton.store(cast[pointer](newF), moRelease)
+      Py_DecRef(newF)
+      f = newF
+  if obj == t:
+    return 1
+  if obj == f:
+    return 0
+  return -1
 
 # ---------------------------------------------------------------------------
 # Forward declarations for recursive container marshaling
@@ -196,15 +222,10 @@ proc fromPyRaw*(obj: PyObjectPtr, T: typedesc[bool]): bool {.gcsafe.} =
   discard flushDeferredDecRefs()
   if obj.isNil:
     raise newException(PhyneConversionError, "Cannot convert nil PyObjectPtr to bool")
-  # Ensure exact bool semantics or truthiness? Check if it's a boolean (True/False)
-  let trueObj = PyBool_FromLong(1)
-  let falseObj = PyBool_FromLong(0)
-  defer:
-    if not trueObj.isNil: Py_DecRef(trueObj)
-    if not falseObj.isNil: Py_DecRef(falseObj)
-  if obj == trueObj:
+  let cls = classifyPyBool(obj)
+  if cls == 1:
     return true
-  elif obj == falseObj:
+  elif cls == 0:
     return false
   else:
     raise newException(PhyneConversionError, "Expected Python bool, got non-bool object")
@@ -213,14 +234,7 @@ proc fromPyRaw*[T: SomeSignedInt](obj: PyObjectPtr, _: typedesc[T]): T {.gcsafe.
   discard flushDeferredDecRefs()
   if obj.isNil:
     raise newException(PhyneConversionError, "Cannot convert nil PyObjectPtr to int")
-  # Reject Python bool when expecting strict integer if desired? Wait: in Python bool is a subclass of int,
-  # but rejecting bool for integer or checking PyLong_AsLongLong: let's check if it's bool first!
-  let trueObj = PyBool_FromLong(1)
-  let falseObj = PyBool_FromLong(0)
-  let isBool = (obj == trueObj) or (obj == falseObj)
-  if not trueObj.isNil: Py_DecRef(trueObj)
-  if not falseObj.isNil: Py_DecRef(falseObj)
-  if isBool:
+  if classifyPyBool(obj) >= 0:
     raise newException(PhyneConversionError, "Expected Python int, got bool")
   let v = PyLong_AsLongLong(obj)
   if v == -1 and not PyErr_Occurred().isNil:
@@ -233,6 +247,8 @@ proc fromPyRaw*[T: SomeUnsignedInt](obj: PyObjectPtr, _: typedesc[T]): T {.gcsaf
   discard flushDeferredDecRefs()
   if obj.isNil:
     raise newException(PhyneConversionError, "Cannot convert nil PyObjectPtr to uint")
+  if classifyPyBool(obj) >= 0:
+    raise newException(PhyneConversionError, "Expected Python uint, got bool")
   let v = PyLong_AsUnsignedLongLong(obj)
   if not PyErr_Occurred().isNil:
     raise newException(PhyneConversionError, fetchPythonErrorMessage())
@@ -244,12 +260,7 @@ proc fromPyRaw*[T: SomeFloat](obj: PyObjectPtr, _: typedesc[T]): T {.gcsafe.} =
   discard flushDeferredDecRefs()
   if obj.isNil:
     raise newException(PhyneConversionError, "Cannot convert nil PyObjectPtr to float")
-  let trueObj = PyBool_FromLong(1)
-  let falseObj = PyBool_FromLong(0)
-  let isBool = (obj == trueObj) or (obj == falseObj)
-  if not trueObj.isNil: Py_DecRef(trueObj)
-  if not falseObj.isNil: Py_DecRef(falseObj)
-  if isBool:
+  if classifyPyBool(obj) >= 0:
     raise newException(PhyneConversionError, "Expected Python float, got bool")
   let v = PyFloat_AsDouble(obj)
   if v == -1.0 and not PyErr_Occurred().isNil:

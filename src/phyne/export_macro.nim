@@ -108,7 +108,25 @@ proc buildPhyneIrJson*(moduleName: string): string {.gcsafe, raises: [].} =
       result.add("]\n    }")
   result.add("\n  ]\n}\n")
 
-proc mapTypeToPyStub(nimType: string): string {.compileTime.} =
+proc splitTopLevelComma(s: string): seq[string] {.compileTime.} =
+  var depth = 0
+  var startIdx = 0
+  for i, ch in s:
+    case ch
+    of '[', '(', '{':
+      inc depth
+    of ']', ')', '}':
+      if depth > 0:
+        dec depth
+    of ',':
+      if depth == 0:
+        result.add(s[startIdx ..< i].strip())
+        startIdx = i + 1
+    else:
+      discard
+  result.add(s[startIdx .. ^1].strip())
+
+proc mapTypeToPyStub*(nimType: string): string {.compileTime.} =
   let t = nimType.strip()
   case t
   of "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
@@ -132,7 +150,7 @@ proc mapTypeToPyStub(nimType: string): string {.compileTime.} =
       mapTypeToPyStub(inner) & " | None"
     elif t.startsWith("Table["):
       let inner = t[6 .. ^2]
-      let parts = inner.split(",")
+      let parts = splitTopLevelComma(inner)
       if parts.len == 2:
         "dict[" & mapTypeToPyStub(parts[0]) & ", " & mapTypeToPyStub(parts[1]) & "]"
       else:
@@ -390,7 +408,9 @@ template phyneInitModule*(moduleName: static[string], moduleDoc: static[string] 
   var gModuleMethods {.global.}: seq[PyMethodDef]
   var gModuleSlots {.global.}: array[3, PyModuleDef_Slot]
   var gModuleDef {.global.}: PyModuleDef
+  var gModuleDefFT {.global.}: PyModuleDef_FT
   var gModuleInitialized {.global.}: bool = false
+  var gModuleIsFT {.global.}: bool = false
 
   proc phyneModuleExec(m: PyObjectPtr): cint {.cdecl, gcsafe, raises: [].} =
     discard phyne_init_runtime()
@@ -430,21 +450,51 @@ template phyneInitModule*(moduleName: static[string], moduleDoc: static[string] 
           value: Py_MOD_GIL_NOT_USED
         )
         gModuleSlots[2] = PyModuleDef_Slot(slot: 0, value: nil)
-        gModuleDef = PyModuleDef(
-          m_base: PyModuleDef_Base(
-            ob_base: PyObject(ob_refcnt: 1, ob_type: nil),
-            m_init: nil,
-            m_index: 0,
-            m_copy: nil
-          ),
-          m_name: cstring(moduleName),
-          m_doc: cstring(moduleDoc),
-          m_size: 0,
-          m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
-          m_slots: addr gModuleSlots[0],
-          m_traverse: nil,
-          m_clear: nil,
-          m_free: nil
-        )
+        gModuleIsFT = isFreeThreadedRuntime()
+        if gModuleIsFT:
+          gModuleDefFT = PyModuleDef_FT(
+            m_base: PyModuleDef_Base_FT(
+              ob_base: PyObject_FT(
+                ob_tid: 0,
+                ob_flags: 0,
+                ob_mutex: 0,
+                ob_gc_bits: 0,
+                ob_ref_local: 0xFFFFFFFF'u32,
+                ob_ref_shared: 0,
+                ob_type: nil
+              ),
+              m_init: nil,
+              m_index: 0,
+              m_copy: nil
+            ),
+            m_name: cstring(moduleName),
+            m_doc: cstring(moduleDoc),
+            m_size: 0,
+            m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
+            m_slots: addr gModuleSlots[0],
+            m_traverse: nil,
+            m_clear: nil,
+            m_free: nil
+          )
+        else:
+          gModuleDef = PyModuleDef(
+            m_base: PyModuleDef_Base(
+              ob_base: PyObject(ob_refcnt: 1, ob_type: nil),
+              m_init: nil,
+              m_index: 0,
+              m_copy: nil
+            ),
+            m_name: cstring(moduleName),
+            m_doc: cstring(moduleDoc),
+            m_size: 0,
+            m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
+            m_slots: addr gModuleSlots[0],
+            m_traverse: nil,
+            m_clear: nil,
+            m_free: nil
+          )
         gModuleInitialized = true
-      return PyModuleDef_Init(addr gModuleDef)
+      if gModuleIsFT:
+        return PyModuleDef_Init(cast[ptr PyModuleDef](addr gModuleDefFT))
+      else:
+        return PyModuleDef_Init(addr gModuleDef)
