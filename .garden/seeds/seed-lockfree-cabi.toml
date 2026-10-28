@@ -1,0 +1,8 @@
+id = "seed-lockfree-cabi"
+title = "Phase 2: lockfree Zero-Copy Two-Phase StreamBuffer Reserve/Commit C ABI, 0-to-1 wakeup transition flag, and destructor drain"
+season = "v0.1.0"
+sunlight = "blazing"
+tags = ["lockfree", "cabi", "zerocopy", "async"]
+status = "SOWN"
+created_at = "2026-10-28T10:05:32Z"
+updated_at = "2026-10-28T10:05:32Z"
