@@ -51,7 +51,7 @@
   - *Verification*: Verify every cited file path and line number in `understanding.md` and stress-test `design.md` until 0 `CRIT` or `BLOCKER` defects remain.
 
 ### Phase 1: `axiomantic/headerkit` Nim Dialect & `.pyi` Stub Writer (PR to `headerkit`)
-- [ ] **Task 1.1: HeaderKit Nim Support, Cleanup Transform & `pyi` Writer** (`pyon-implementer`)
+- [x] **Task 1.1: HeaderKit Nim Support, Cleanup Transform & `pyi` Writer** (`pyon-implementer`)
   - *Repo*: `/Users/eek/Development/headerkit`
   - *Strand*: `vine new task-headerkit-nim-pyi --branch feat/nim-header-pyi`
   - *Provider*:
@@ -74,15 +74,21 @@
   - *Verification*: `nimble test && nimble cabi` + `vine submit --author pyon-architect` + Key 3 audit by `pyon-auditor` + feature branch PR.
 
 ### Phase 3: `phyne` Core Bidirectional Nim-Python Bridge (`abi3`/`abi3t` + `cffi` + `phyne/asyncio`)
-- [ ] **Task 3.1: `phyne` Core Runtime, `PyObj` Deferred DecRef, Buffer Protocol & `phyne/asyncio`** (`pyon-architect` & `pyon-implementer`)
+- [x] **Task 3.1: `phyne` Core Runtime, `PyObj` Deferred DecRef, Buffer Protocol & `phyne/asyncio`** (`pyon-architect` & `pyon-implementer`)
   - *Dependency*: Task 1.1, Task 2.1
   - *Repo*: `/Users/eek/Development/phyne` (or `/Users/eek/Development/pyon` renamed/configured as `phyne`)
   - *Provider*: `src/phyne/abi.nim`, `src/phyne/pyobj.nim`, `src/phyne/buffer.nim`, `src/phyne/export_macro.nim`, `src/phyne/asyncio.nim`, `python/phyne/asyncio.py`, `python/phyne/writer_plugin.py`
   - *Consumer / Call-Site*: End-to-end Nim-to-Python and Python-to-Nim extension modules tested under CPython (`abi3`/`abi3t`) and CFFI.
 
 ### Phase 4: `lockless` Flagship Python Package (`pip install lockless`)
-- [ ] **Task 4.1: `lockless` High-Contention Collections, Zero-Copy DSP Buffers & Async Channels** (`pyon-implementer` & `pyon-architect`)
+- [x] **Task 4.1: `lockless` High-Contention Collections, Zero-Copy DSP Buffers & Async Channels** (`pyon-implementer` & `pyon-architect`)
   - *Dependency*: Task 2.1, Task 3.1
   - *Repo*: `/Users/eek/Development/lockless`
   - *Provider*: `BQueue128`, `SpscQueue`, `MpmcQueue`, `StreamBuffer` (zero-copy `memoryview`), `BroadcastRing`, `ConcurrentDict` (`Ctrie`), `SkipListMap`, `Channel` (`async for`), `TaskPool.map()`.
   - *Consumer / Call-Site*: Live Python test suite + multi-threaded contention benchmark suite.
+
+### Phase 5: `axiomantic/polyform` Polyglot Nim + Free-Threaded Python + Nimony CI Template (PR to `polyform`)
+- [x] **Task 5.1: `polyform` Polyglot Nim + Python `abi3t`/`cffi` + `headerkit` + `nimony` CI Workflows** (`pyon-architect`)
+  - *Repo*: `/Users/eek/Development/polyform`
+  - *Strand*: `vine new task-polyform-ci --branch feat/nim-python-freethreaded-nimony-ci`
+  - *Provider & Consumer*: Polyglot `has_nim` + `has_python` template integration with `headerkit` codegen, Free-Threaded Python (`3.13t`, `3.14t`) CI matrix, and `nimony` compatibility verification target, verified by `polyform`'s test suite and submitted via Pull Request (never pushed to `main`).
