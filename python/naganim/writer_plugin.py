@@ -1,7 +1,7 @@
-"""PhyneWriterPlugin: Dual-target Python stub (.pyi), CFFI cdef, and abi3 loader generator.
+"""NaganimWriterPlugin: Dual-target Python stub (.pyi), CFFI cdef, and abi3 loader generator.
 
-Consumes the `.phyne.ir.json` intermediate representation emitted by `phyne`'s
-`{.exportpy.}` macro (or `phyne_module_ir_json()`).
+Consumes the `.naganim.ir.json` intermediate representation emitted by `naganim`'s
+`{.exportpy.}` macro (or `naganim_module_ir_json()`).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class PhyneParamSpec:
+class NaganimParamSpec:
     name: str
     nim_type: str
     c_type: str
@@ -21,7 +21,7 @@ class PhyneParamSpec:
 
 
 @dataclass(frozen=True)
-class PhyneFunctionSpec:
+class NaganimFunctionSpec:
     name: str
     c_symbol: str
     py_symbol: str
@@ -30,20 +30,20 @@ class PhyneFunctionSpec:
     return_nim_type: str
     return_c_type: str
     return_py_type: str
-    params: list[PhyneParamSpec] = field(default_factory=list)
+    params: list[NaganimParamSpec] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class PhyneModuleIr:
+class NaganimModuleIr:
     module: str
-    functions: list[PhyneFunctionSpec] = field(default_factory=list)
+    functions: list[NaganimFunctionSpec] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> PhyneModuleIr:
-        funcs: list[PhyneFunctionSpec] = []
+    def from_dict(cls, raw: dict[str, Any]) -> NaganimModuleIr:
+        funcs: list[NaganimFunctionSpec] = []
         for fn in raw.get("functions", []):
             params = [
-                PhyneParamSpec(
+                NaganimParamSpec(
                     name=str(p["name"]),
                     nim_type=str(p["nim_type"]),
                     c_type=str(p["c_type"]),
@@ -52,7 +52,7 @@ class PhyneModuleIr:
                 for p in fn.get("params", [])
             ]
             funcs.append(
-                PhyneFunctionSpec(
+                NaganimFunctionSpec(
                     name=str(fn["name"]),
                     c_symbol=str(fn["c_symbol"]),
                     py_symbol=str(fn["py_symbol"]),
@@ -67,11 +67,11 @@ class PhyneModuleIr:
         return cls(module=str(raw["module"]), functions=funcs)
 
     @classmethod
-    def from_json(cls, json_str: str) -> PhyneModuleIr:
+    def from_json(cls, json_str: str) -> NaganimModuleIr:
         return cls.from_dict(json.loads(json_str))
 
 
-class PhyneWriterPlugin:
+class NaganimWriterPlugin:
     """Generates `.pyi` type stubs, CFFI `cdef` declarations, and loader modules."""
 
     BASE_CFFI_CDEF = """
@@ -84,23 +84,23 @@ typedef struct {
     const char* format;
     void* owner_ctx;
     void (*release_fn)(void*);
-} phyne_buf_view_t;
+} naganim_buf_view_t;
 
-int phyne_init_runtime(void);
-int phyne_shutdown_runtime(void);
-void phyne_clear_error(void);
-const char* phyne_last_error(void);
-void phyne_set_last_error(const char* msg);
-int phyne_flush_deferred_decrefs(void);
-int phyne_deferred_decref_count(void);
-void phyne_buf_release(phyne_buf_view_t* view);
-const char* phyne_module_ir_json(void);
+int naganim_init_runtime(void);
+int naganim_shutdown_runtime(void);
+void naganim_clear_error(void);
+const char* naganim_last_error(void);
+void naganim_set_last_error(const char* msg);
+int naganim_flush_deferred_decrefs(void);
+int naganim_deferred_decref_count(void);
+void naganim_buf_release(naganim_buf_view_t* view);
+const char* naganim_module_ir_json(void);
 
-void* phyne_async_bridge_create(int num_workers);
-void phyne_async_bridge_destroy(void* bridge_ptr);
-int phyne_async_bridge_read_fd(void* bridge_ptr);
-int phyne_async_drain_wakeup(void* bridge_ptr);
-int phyne_async_pop_completion(
+void* naganim_async_bridge_create(int num_workers);
+void naganim_async_bridge_destroy(void* bridge_ptr);
+int naganim_async_bridge_read_fd(void* bridge_ptr);
+int naganim_async_drain_wakeup(void* bridge_ptr);
+int naganim_async_pop_completion(
     void* bridge_ptr,
     uint64_t* out_future_id,
     int* out_status,
@@ -108,32 +108,32 @@ int phyne_async_pop_completion(
     double* out_float,
     const char** out_str
 );
-int phyne_async_submit_compute(
+int naganim_async_submit_compute(
     void* bridge_ptr,
     uint64_t future_id,
     int op_code,
     int64_t arg_a,
     int64_t arg_b
 );
-int phyne_async_channel_push_int(void* bridge_ptr, uint64_t channel_id, int64_t val);
-int phyne_async_channel_close(void* bridge_ptr, uint64_t channel_id);
+int naganim_async_channel_push_int(void* bridge_ptr, uint64_t channel_id, int64_t val);
+int naganim_async_channel_close(void* bridge_ptr, uint64_t channel_id);
 """.strip()
 
-    def __init__(self, ir: PhyneModuleIr) -> None:
+    def __init__(self, ir: NaganimModuleIr) -> None:
         self.ir = ir
 
     @classmethod
-    def from_ir_file(cls, path: str | Path) -> PhyneWriterPlugin:
+    def from_ir_file(cls, path: str | Path) -> NaganimWriterPlugin:
         text = Path(path).read_text(encoding="utf-8")
-        return cls(PhyneModuleIr.from_json(text))
+        return cls(NaganimModuleIr.from_json(text))
 
     @classmethod
-    def from_ir_json(cls, json_str: str) -> PhyneWriterPlugin:
-        return cls(PhyneModuleIr.from_json(json_str))
+    def from_ir_json(cls, json_str: str) -> NaganimWriterPlugin:
+        return cls(NaganimModuleIr.from_json(json_str))
 
     def generate_pyi_stub(self) -> str:
         lines: list[str] = [
-            f"# Auto-generated PEP 484 stub for phyne module `{self.ir.module}`",
+            f"# Auto-generated PEP 484 stub for naganim module `{self.ir.module}`",
             "from __future__ import annotations",
             "from typing import Any",
             "",

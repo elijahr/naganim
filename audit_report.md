@@ -73,7 +73,7 @@ All 8 findings have been empirically verified and remediated directly in `/Users
 
 ---
 
-### `[HIGH-02]` Lost Wakeup Hazard in `phyne/asyncio` When `BQueue128` Producer Is Preempted Between `tail` CAS and Slot DWCAS
+### `[HIGH-02]` Lost Wakeup Hazard in `naganim/asyncio` When `BQueue128` Producer Is Preempted Between `tail` CAS and Slot DWCAS
 - **Severity**: `HIGH` (Deadlock / lost wakeup under multi-producer preemption)
 - **Locations in Audited Docs**:
   - `design.md:154-162`, `design.md:344-380`
@@ -85,7 +85,7 @@ All 8 findings have been empirically verified and remediated directly in `/Users
 - **Remediation Applied to `design.md`**:
   1. In `BQueue128.tryPushEx` (`src/lockfree/bqueue128.nim`), `wasEmpty` is computed as `let h = self.head.load(moAcquire); wasEmpty = (h == pos)` where `pos` is the exact sequence turn claimed by the CAS on `self.tail`.
   2. In `BoundedQueueImpl` (`src/lockfree/cabi.nim`), `boundedPushEx` checks `head == claimedPos` (or `let h = q.rawQueue.head.load(moAcquire); let t = q.rawQueue.tail.load(moAcquire); wasEmpty = (t - h <= 1)` immediately after publish).
-  3. In `phyne/asyncio` (`design.md:369-380`), the producer executes `threadFence(moSequentiallyConsistent)` *after* the slot DWCAS completes and wakes `wakeup_fd` whenever `consumerSleeping.exchange(false, moSequentiallyConsistent)` returns `true` (independent of `was_empty`, because `consumerSleeping` is only `true` when the consumer is idle, guaranteeing 0 syscalls during active polling and at most 1 syscall per sleep transition). On the consumer side, if `not lf_bqueue128_is_empty(ring)` is true during the Dekker re-check but `lf_bqueue128_pop` returns `LF_ERR_EMPTY` (due to an in-flight preempted producer), the consumer schedules `loop.call_soon(_on_wakeup)` rather than returning with `consumerSleeping == false`.
+  3. In `naganim/asyncio` (`design.md:369-380`), the producer executes `threadFence(moSequentiallyConsistent)` *after* the slot DWCAS completes and wakes `wakeup_fd` whenever `consumerSleeping.exchange(false, moSequentiallyConsistent)` returns `true` (independent of `was_empty`, because `consumerSleeping` is only `true` when the consumer is idle, guaranteeing 0 syscalls during active polling and at most 1 syscall per sleep transition). On the consumer side, if `not lf_bqueue128_is_empty(ring)` is true during the Dekker re-check but `lf_bqueue128_pop` returns `LF_ERR_EMPTY` (due to an in-flight preempted producer), the consumer schedules `loop.call_soon(_on_wakeup)` rather than returning with `consumerSleeping == false`.
 
 ---
 
@@ -97,7 +97,7 @@ All 8 findings have been empirically verified and remediated directly in `/Users
   - Inspection of `lf_table_put` (`cabi.nim:1169-1181`), `lf_table_delete` (`cabi.nim:1198-1213`), `lf_ctrie_insert`/`put` (`cabi.nim:1489-1510`), and `lf_ctrie_remove` (`cabi.nim:1532-1555`) confirms that `table.destructor` and `ctrie.destructor` are **only invoked inside `lf_table_destroy` (`line 1161`) and `lf_ctrie_destroy` (`line 1481`)** — they are **never** invoked when `put` overwrites an existing key or when `delete`/`remove` removes a key!
   - Furthermore, `lf_broadcast_create` (`cabi.nim:1706-1723`) does not take a destructor callback at all.
 - **Remediation Applied to `design.md`**:
-  - Specified in `design.md` Section 5.2 that `lockless_ext.nim` (which imports `lockfree` directly in Nim) uses `ctrie.put(key, val): Option[V]` and `ctrie.remove(key): Option[V]` (and `skiplist` equivalents) to receive the displaced `Option[pointer]` and immediately pass any displaced `PyObject*` to `phyne`'s deferred `Py_DecRef` queue, and manages a companion atomic slot table in `lockless.BroadcastRing` so overwritten `PyRefBox` entries on `omDropOldest` and remaining entries on `destroy` are deterministically decref'd.
+  - Specified in `design.md` Section 5.2 that `lockless_ext.nim` (which imports `lockfree` directly in Nim) uses `ctrie.put(key, val): Option[V]` and `ctrie.remove(key): Option[V]` (and `skiplist` equivalents) to receive the displaced `Option[pointer]` and immediately pass any displaced `PyObject*` to `naganim`'s deferred `Py_DecRef` queue, and manages a companion atomic slot table in `lockless.BroadcastRing` so overwritten `PyRefBox` entries on `omDropOldest` and remaining entries on `destroy` are deterministically decref'd.
 
 ---
 
@@ -109,7 +109,7 @@ All 8 findings have been empirically verified and remediated directly in `/Users
   - In CPython `3.13t` and `3.14t` (`Py_GIL_DISABLED`), CPython's `<Python.h>` emits `#error "Py_LIMITED_API is incompatible with Py_GIL_DISABLED"`, and the C macro `Py_INCREF` manipulates `ob_tid`, `ob_ref_local`, and `ob_ref_shared` at offsets incompatible with GIL-enabled `PyObject`.
   - However, CPython exports the **function symbols** `Py_IncRef(PyObject*)` and `Py_DecRef(PyObject*)` in both GIL and Free-Threaded `libpython`!
 - **Remediation Applied to `design.md`**:
-  - `phyne/abi3.nim` declares CPython ABI functions directly in Nim via `{.importc, cdecl.}` (without `#include <Python.h>`) and exclusively calls the exported function symbols `Py_IncRef` and `Py_DecRef` (never inline `ob_refcnt` struct manipulation), enabling clean compilation and binary execution across both CPython 3.12–3.15 (`abi3`) and Free-Threaded 3.13t–3.15t (`abi3t` with `Py_mod_gil = Py_MOD_GIL_NOT_USED`).
+  - `naganim/abi3.nim` declares CPython ABI functions directly in Nim via `{.importc, cdecl.}` (without `#include <Python.h>`) and exclusively calls the exported function symbols `Py_IncRef` and `Py_DecRef` (never inline `ob_refcnt` struct manipulation), enabling clean compilation and binary execution across both CPython 3.12–3.15 (`abi3`) and Free-Threaded 3.13t–3.15t (`abi3t` with `Py_mod_gil = Py_MOD_GIL_NOT_USED`).
 
 ---
 

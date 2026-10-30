@@ -1,4 +1,4 @@
-"""CFFI & ABI3 Dynamic Extension Loaders for phyne."""
+"""CFFI & ABI3 Dynamic Extension Loaders for naganim."""
 
 from __future__ import annotations
 
@@ -11,22 +11,22 @@ from typing import Any, Callable
 
 import cffi
 
-from .writer_plugin import PhyneFunctionSpec, PhyneModuleIr, PhyneWriterPlugin
+from .writer_plugin import NaganimFunctionSpec, NaganimModuleIr, NaganimWriterPlugin
 
 
-class PhyneRuntimeError(RuntimeError):
-    """Raised when a Nim procedure exported via phyne C-ABI fails with an exception."""
+class NaganimRuntimeError(RuntimeError):
+    """Raised when a Nim procedure exported via naganim C-ABI fails with an exception."""
 
 
-class PhyneBufferOwner:
-    """RAII wrapper for `phyne_buf_view_t` exported over CFFI."""
+class NaganimBufferOwner:
+    """RAII wrapper for `naganim_buf_view_t` exported over CFFI."""
 
     def __init__(self, ffi: cffi.FFI, lib: Any, view_ptr: Any) -> None:
         self._ffi = ffi
         self._lib = lib
         self._view_ptr = view_ptr
         self._released = False
-        self._finalizer = weakref.finalize(self, lib.phyne_buf_release, view_ptr)
+        self._finalizer = weakref.finalize(self, lib.naganim_buf_release, view_ptr)
 
     @property
     def byte_length(self) -> int:
@@ -38,7 +38,7 @@ class PhyneBufferOwner:
 
     def to_buffer(self) -> Any:
         if self._released:
-            raise BufferError("PhyneBufferOwner has already been released")
+            raise BufferError("NaganimBufferOwner has already been released")
         return self._ffi.buffer(self._view_ptr.data, int(self._view_ptr.len))
 
     def release(self) -> None:
@@ -46,15 +46,15 @@ class PhyneBufferOwner:
             self._released = True
             self._finalizer()
 
-    def __enter__(self) -> PhyneBufferOwner:
+    def __enter__(self) -> NaganimBufferOwner:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.release()
 
 
-class PhyneCffiModule:
-    """Dynamically wraps a compiled `phyne` shared library via CFFI ABI mode."""
+class NaganimCffiModule:
+    """Dynamically wraps a compiled `naganim` shared library via CFFI ABI mode."""
 
     def __init__(self, lib_path: str | Path) -> None:
         self.lib_path = Path(lib_path).resolve()
@@ -63,18 +63,18 @@ class PhyneCffiModule:
 
         # Bootstrap FFI to read embedded IR JSON
         boot_ffi = cffi.FFI()
-        boot_ffi.cdef(PhyneWriterPlugin.BASE_CFFI_CDEF)
+        boot_ffi.cdef(NaganimWriterPlugin.BASE_CFFI_CDEF)
         boot_lib = boot_ffi.dlopen(str(self.lib_path))
-        rc = int(boot_lib.phyne_init_runtime())
+        rc = int(boot_lib.naganim_init_runtime())
         if rc != 0:
-            raise PhyneRuntimeError(f"phyne_init_runtime() failed with status {rc}")
+            raise NaganimRuntimeError(f"naganim_init_runtime() failed with status {rc}")
 
-        ir_ptr = boot_lib.phyne_module_ir_json()
+        ir_ptr = boot_lib.naganim_module_ir_json()
         if ir_ptr == boot_ffi.NULL:
-            raise PhyneRuntimeError("phyne_module_ir_json() returned NULL")
+            raise NaganimRuntimeError("naganim_module_ir_json() returned NULL")
         ir_json = boot_ffi.string(ir_ptr).decode("utf-8")
-        self.ir: PhyneModuleIr = PhyneModuleIr.from_json(ir_json)
-        self.plugin = PhyneWriterPlugin(self.ir)
+        self.ir: NaganimModuleIr = NaganimModuleIr.from_json(ir_json)
+        self.plugin = NaganimWriterPlugin(self.ir)
 
         # Full FFI instance with all exported C-ABI function signatures
         self.ffi = cffi.FFI()
@@ -90,15 +90,15 @@ class PhyneCffiModule:
 
     def _check_status(self, status: int) -> None:
         if status != 0:
-            err_ptr = self.lib.phyne_last_error()
+            err_ptr = self.lib.naganim_last_error()
             if err_ptr != self.ffi.NULL:
                 msg = self.ffi.string(err_ptr).decode("utf-8", errors="replace")
             else:
                 msg = f"Nim C-ABI error (status={status})"
-            self.lib.phyne_clear_error()
-            raise PhyneRuntimeError(msg)
+            self.lib.naganim_clear_error()
+            raise NaganimRuntimeError(msg)
 
-    def _make_c_wrapper(self, spec: PhyneFunctionSpec) -> Callable[..., Any]:
+    def _make_c_wrapper(self, spec: NaganimFunctionSpec) -> Callable[..., Any]:
         c_fn = getattr(self.lib, spec.c_symbol)
         ret_c = spec.return_c_type
         ret_nim = spec.return_nim_type
@@ -151,11 +151,11 @@ class PhyneCffiModule:
                 if out_ptr[0] == self.ffi.NULL:
                     return ""
                 return self.ffi.string(out_ptr[0]).decode("utf-8")
-            elif ret_c == "phyne_buf_view_t":
-                out_view = self.ffi.new("phyne_buf_view_t*")
+            elif ret_c == "naganim_buf_view_t":
+                out_view = self.ffi.new("naganim_buf_view_t*")
                 status = int(c_fn(*converted_args, out_view))
                 self._check_status(status)
-                return PhyneBufferOwner(self.ffi, self.lib, out_view)
+                return NaganimBufferOwner(self.ffi, self.lib, out_view)
             elif ret_c == "bool":
                 out_ptr = self.ffi.new("bool*")
                 status = int(c_fn(*converted_args, out_ptr))
@@ -177,19 +177,19 @@ class PhyneCffiModule:
         return _call
 
     def flush_deferred_decrefs(self) -> int:
-        return int(self.lib.phyne_flush_deferred_decrefs())
+        return int(self.lib.naganim_flush_deferred_decrefs())
 
     def deferred_decref_count(self) -> int:
-        return int(self.lib.phyne_deferred_decref_count())
+        return int(self.lib.naganim_deferred_decref_count())
 
 
-def load_cffi_library(lib_path: str | Path) -> PhyneCffiModule:
-    """Loads a compiled `phyne` shared library via CFFI ABI mode."""
-    return PhyneCffiModule(lib_path)
+def load_cffi_library(lib_path: str | Path) -> NaganimCffiModule:
+    """Loads a compiled `naganim` shared library via CFFI ABI mode."""
+    return NaganimCffiModule(lib_path)
 
 
 def load_abi3_extension(module_name: str, lib_path: str | Path) -> ModuleType:
-    """Loads a compiled `phyne` shared library as a native CPython PEP 489 `abi3`/`abi3t` extension."""
+    """Loads a compiled `naganim` shared library as a native CPython PEP 489 `abi3`/`abi3t` extension."""
     resolved = Path(lib_path).resolve()
     if not resolved.exists():
         raise FileNotFoundError(f"Extension library not found: {resolved}")

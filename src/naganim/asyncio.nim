@@ -1,4 +1,4 @@
-## Lock-Free `phyne/asyncio` Event-Loop Bridge, `TaskPool` Offloading & `AsyncChannel`.
+## Lock-Free `naganim/asyncio` Event-Loop Bridge, `TaskPool` Offloading & `AsyncChannel`.
 ##
 ## Implements `design.md` §3.3 (`CRIT-03`):
 ## - Bounded lock-free completion ring (`BQueue128[pointer, 1024]`) + overflow
@@ -16,13 +16,13 @@ import ./lifecycle
 import ./gc_bridge
 
 type
-  PhyneCompletionKind* = enum
+  NaganimCompletionKind* = enum
     pckFutureOk = 0
     pckFutureErr = -1
     pckChannelItem = 1
     pckChannelClosed = 2
 
-  PhyneCompletionEvent* = object
+  NaganimCompletionEvent* = object
     futureId*: uint64
     status*: cint
     intVal*: int64
@@ -30,18 +30,18 @@ type
     strPayload*: pointer
     strLen*: int
 
-  PhyneIntTaskProc* = proc(arg: int64): int64 {.cdecl, gcsafe.}
+  NaganimIntTaskProc* = proc(arg: int64): int64 {.cdecl, gcsafe.}
 
-  PhyneTaskCtx = object
-    bridge: ptr PhyneAsyncBridge
+  NaganimTaskCtx = object
+    bridge: ptr NaganimAsyncBridge
     futureId: uint64
     opCode: cint
     argA: int64
     argB: int64
-    customFn: PhyneIntTaskProc
+    customFn: NaganimIntTaskProc
     pyObjCarry: pointer # Optional stolen PyObj pointer to test non-Python thread destruction
 
-  PhyneAsyncBridge* = object
+  NaganimAsyncBridge* = object
     ringPtr*: ptr BQueue128[pointer, 1024]
     overflow*: TreiberStack[pointer]
     pendingWakeup*: Atomic[bool]
@@ -58,7 +58,7 @@ proc setFdNonBlocking(fd: cint) {.gcsafe, raises: [].} =
   if flags >= 0:
     discard fcntl(fd, F_SETFL, flags or O_NONBLOCK)
 
-proc signalBridgeWakeup*(bridge: ptr PhyneAsyncBridge) {.gcsafe, raises: [].} =
+proc signalBridgeWakeup*(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} =
   if bridge.isNil or bridge.writeFd < 0:
     return
   if not bridge.pendingWakeup.exchange(true, moAcquireRelease):
@@ -66,14 +66,14 @@ proc signalBridgeWakeup*(bridge: ptr PhyneAsyncBridge) {.gcsafe, raises: [].} =
     discard posix.write(bridge.writeFd, addr b, 1)
 
 proc onDeferredDecRefWakeup() {.cdecl, gcsafe, raises: [].} =
-  let bridge = cast[ptr PhyneAsyncBridge](gActiveBridgeForDecRef.load(moAcquire))
+  let bridge = cast[ptr NaganimAsyncBridge](gActiveBridgeForDecRef.load(moAcquire))
   if not bridge.isNil:
     signalBridgeWakeup(bridge)
 
-proc pushCompletionEvent*(bridge: ptr PhyneAsyncBridge, ev: PhyneCompletionEvent) {.gcsafe, raises: [].} =
+proc pushCompletionEvent*(bridge: ptr NaganimAsyncBridge, ev: NaganimCompletionEvent) {.gcsafe, raises: [].} =
   if bridge.isNil or bridge.ringPtr.isNil:
     return
-  let evBox = cast[ptr PhyneCompletionEvent](allocShared0(sizeof(PhyneCompletionEvent)))
+  let evBox = cast[ptr NaganimCompletionEvent](allocShared0(sizeof(NaganimCompletionEvent)))
   evBox[] = ev
   let rawBox = cast[pointer](evBox)
   var pushed = false
@@ -87,7 +87,7 @@ proc pushCompletionEvent*(bridge: ptr PhyneAsyncBridge, ev: PhyneCompletionEvent
     signalBridgeWakeup(bridge)
 
 proc pushCompletionString*(
-  bridge: ptr PhyneAsyncBridge,
+  bridge: ptr NaganimAsyncBridge,
   futureId: uint64,
   status: cint,
   s: string
@@ -96,7 +96,7 @@ proc pushCompletionString*(
   if s.len > 0:
     p = allocShared0(s.len + 1)
     copyMem(p, unsafeAddr s[0], s.len)
-  let ev = PhyneCompletionEvent(
+  let ev = NaganimCompletionEvent(
     futureId: futureId,
     status: status,
     intVal: 0,
@@ -106,14 +106,14 @@ proc pushCompletionString*(
   )
   pushCompletionEvent(bridge, ev)
 
-proc createAsyncBridge*(numWorkers: int = 4): ptr PhyneAsyncBridge {.gcsafe.} =
+proc createAsyncBridge*(numWorkers: int = 4): ptr NaganimAsyncBridge {.gcsafe.} =
   var fds: array[2, cint]
   if posix.pipe(fds) != 0:
-    raise newException(PhyneError, "posix.pipe() failed while creating PhyneAsyncBridge")
+    raise newException(NaganimError, "posix.pipe() failed while creating NaganimAsyncBridge")
   setFdNonBlocking(fds[0])
   setFdNonBlocking(fds[1])
 
-  let bridge = cast[ptr PhyneAsyncBridge](allocShared0(sizeof(PhyneAsyncBridge)))
+  let bridge = cast[ptr NaganimAsyncBridge](allocShared0(sizeof(NaganimAsyncBridge)))
   {.cast(gcsafe).}:
     bridge.ringPtr = allocAlignedBQueue128[pointer, 1024]()
     bridge.overflow = initTreiberStack[pointer]()
@@ -128,7 +128,7 @@ proc createAsyncBridge*(numWorkers: int = 4): ptr PhyneAsyncBridge {.gcsafe.} =
   gDeferredWakeupCallback.store(cast[pointer](onDeferredDecRefWakeup), moRelease)
   return bridge
 
-proc destroyAsyncBridge*(bridge: ptr PhyneAsyncBridge) {.gcsafe, raises: [].} =
+proc destroyAsyncBridge*(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} =
   if bridge.isNil:
     return
   var expected = cast[pointer](bridge)
@@ -147,7 +147,7 @@ proc destroyAsyncBridge*(bridge: ptr PhyneAsyncBridge) {.gcsafe, raises: [].} =
     if not bridge.ringPtr.isNil:
       while bridge.ringPtr[].tryPop(rawBox):
         if not rawBox.isNil:
-          let evPtr = cast[ptr PhyneCompletionEvent](rawBox)
+          let evPtr = cast[ptr NaganimCompletionEvent](rawBox)
           if not evPtr.strPayload.isNil:
             deallocShared(evPtr.strPayload)
           deallocShared(evPtr)
@@ -159,7 +159,7 @@ proc destroyAsyncBridge*(bridge: ptr PhyneAsyncBridge) {.gcsafe, raises: [].} =
         break
       rawBox = opt.get()
       if not rawBox.isNil:
-        let evPtr = cast[ptr PhyneCompletionEvent](rawBox)
+        let evPtr = cast[ptr NaganimCompletionEvent](rawBox)
         if not evPtr.strPayload.isNil:
           deallocShared(evPtr.strPayload)
         deallocShared(evPtr)
@@ -171,7 +171,7 @@ proc destroyAsyncBridge*(bridge: ptr PhyneAsyncBridge) {.gcsafe, raises: [].} =
     bridge.writeFd = -1
   deallocShared(bridge)
 
-proc drainWakeupPipe*(bridge: ptr PhyneAsyncBridge): int {.discardable, gcsafe, raises: [].} =
+proc drainWakeupPipe*(bridge: ptr NaganimAsyncBridge): int {.discardable, gcsafe, raises: [].} =
   ## Drains all pending wakeup bytes from `readFd`, clears `pendingWakeup`,
   ## and flushes any deferred `Py_DecRef` pointers accumulated from worker threads.
   if bridge.isNil or bridge.readFd < 0:
@@ -187,7 +187,7 @@ proc drainWakeupPipe*(bridge: ptr PhyneAsyncBridge): int {.discardable, gcsafe, 
   discard flushDeferredDecRefs()
   return totalBytes
 
-proc popCompletion*(bridge: ptr PhyneAsyncBridge, outEv: var PhyneCompletionEvent): bool {.gcsafe, raises: [].} =
+proc popCompletion*(bridge: ptr NaganimAsyncBridge, outEv: var NaganimCompletionEvent): bool {.gcsafe, raises: [].} =
   if bridge.isNil or bridge.ringPtr.isNil:
     return false
   discard flushDeferredDecRefs()
@@ -195,7 +195,7 @@ proc popCompletion*(bridge: ptr PhyneAsyncBridge, outEv: var PhyneCompletionEven
   {.cast(gcsafe), cast(raises: []).}:
     if bridge.ringPtr[].tryPop(rawBox):
       if not rawBox.isNil:
-        let evPtr = cast[ptr PhyneCompletionEvent](rawBox)
+        let evPtr = cast[ptr NaganimCompletionEvent](rawBox)
         outEv = evPtr[]
         deallocShared(evPtr)
         return true
@@ -203,7 +203,7 @@ proc popCompletion*(bridge: ptr PhyneAsyncBridge, outEv: var PhyneCompletionEven
     if opt.isSome:
       rawBox = opt.get()
       if not rawBox.isNil:
-        let evPtr = cast[ptr PhyneCompletionEvent](rawBox)
+        let evPtr = cast[ptr NaganimCompletionEvent](rawBox)
         outEv = evPtr[]
         deallocShared(evPtr)
         return true
@@ -213,7 +213,7 @@ proc popCompletion*(bridge: ptr PhyneAsyncBridge, outEv: var PhyneCompletionEven
 # Worker Task Execution on lockfree TaskPool (Runs without Python GIL!)
 # ---------------------------------------------------------------------------
 proc workerExecuteTask(arg: pointer) {.nimcall, gcsafe.} =
-  let ctx = cast[ptr PhyneTaskCtx](arg)
+  let ctx = cast[ptr NaganimTaskCtx](arg)
   if ctx.isNil:
     return
   let bridge = ctx.bridge
@@ -236,7 +236,7 @@ proc workerExecuteTask(arg: pointer) {.nimcall, gcsafe.} =
         pushCompletionString(bridge, futId, cint(pckFutureErr), "Null task function pointer")
       else:
         let res = customFn(a)
-        pushCompletionEvent(bridge, PhyneCompletionEvent(
+        pushCompletionEvent(bridge, NaganimCompletionEvent(
           futureId: futId,
           status: cint(pckFutureOk),
           intVal: res
@@ -248,7 +248,7 @@ proc workerExecuteTask(arg: pointer) {.nimcall, gcsafe.} =
         var acc: int64 = 0
         for x in a .. b:
           acc += x * x
-        pushCompletionEvent(bridge, PhyneCompletionEvent(
+        pushCompletionEvent(bridge, NaganimCompletionEvent(
           futureId: futId,
           status: cint(pckFutureOk),
           intVal: acc
@@ -263,7 +263,7 @@ proc workerExecuteTask(arg: pointer) {.nimcall, gcsafe.} =
     pushCompletionString(bridge, futId, cint(pckFutureErr), $d.name & ": " & d.msg)
 
 proc submitComputeTask*(
-  bridge: ptr PhyneAsyncBridge,
+  bridge: ptr NaganimAsyncBridge,
   futureId: uint64,
   opCode: cint,
   argA: int64,
@@ -271,8 +271,8 @@ proc submitComputeTask*(
   stolenPyObjPtr: pointer = nil
 ) {.gcsafe.} =
   if bridge.isNil or not bridge.poolInitialized:
-    raise newException(PhyneError, "PhyneAsyncBridge TaskPool is not initialized")
-  let ctx = cast[ptr PhyneTaskCtx](allocShared0(sizeof(PhyneTaskCtx)))
+    raise newException(NaganimError, "NaganimAsyncBridge TaskPool is not initialized")
+  let ctx = cast[ptr NaganimTaskCtx](allocShared0(sizeof(NaganimTaskCtx)))
   ctx.bridge = bridge
   ctx.futureId = futureId
   ctx.opCode = opCode
@@ -284,14 +284,14 @@ proc submitComputeTask*(
     bridge.pool.spawn(workerExecuteTask, cast[pointer](ctx))
 
 proc submitIntTask*(
-  bridge: ptr PhyneAsyncBridge,
+  bridge: ptr NaganimAsyncBridge,
   futureId: uint64,
-  fn: PhyneIntTaskProc,
+  fn: NaganimIntTaskProc,
   arg: int64
 ) {.gcsafe.} =
   if bridge.isNil or not bridge.poolInitialized:
-    raise newException(PhyneError, "PhyneAsyncBridge TaskPool is not initialized")
-  let ctx = cast[ptr PhyneTaskCtx](allocShared0(sizeof(PhyneTaskCtx)))
+    raise newException(NaganimError, "NaganimAsyncBridge TaskPool is not initialized")
+  let ctx = cast[ptr NaganimTaskCtx](allocShared0(sizeof(NaganimTaskCtx)))
   ctx.bridge = bridge
   ctx.futureId = futureId
   ctx.opCode = 0
@@ -303,29 +303,29 @@ proc submitIntTask*(
     bridge.pool.spawn(workerExecuteTask, cast[pointer](ctx))
 
 # ---------------------------------------------------------------------------
-# C-ABI Exports for Python `phyne.asyncio` (`PhyneAsyncBridge` & `AsyncChannel`)
+# C-ABI Exports for Python `naganim.asyncio` (`NaganimAsyncBridge` & `AsyncChannel`)
 # ---------------------------------------------------------------------------
-proc phyne_async_bridge_create*(numWorkers: cint): pointer {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
-  discard phyne_init_runtime()
+proc naganim_async_bridge_create*(numWorkers: cint): pointer {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  discard naganim_init_runtime()
   try:
     return cast[pointer](createAsyncBridge(int(numWorkers)))
   except CatchableError as e:
     setLastError($e.name & ": " & e.msg)
     return nil
 
-proc phyne_async_bridge_destroy*(bridgePtr: pointer) {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
-  destroyAsyncBridge(cast[ptr PhyneAsyncBridge](bridgePtr))
+proc naganim_async_bridge_destroy*(bridgePtr: pointer) {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  destroyAsyncBridge(cast[ptr NaganimAsyncBridge](bridgePtr))
 
-proc phyne_async_bridge_read_fd*(bridgePtr: pointer): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
-  let b = cast[ptr PhyneAsyncBridge](bridgePtr)
+proc naganim_async_bridge_read_fd*(bridgePtr: pointer): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  let b = cast[ptr NaganimAsyncBridge](bridgePtr)
   if b.isNil: return -1
   return b.readFd
 
-proc phyne_async_drain_wakeup*(bridgePtr: pointer): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
-  let b = cast[ptr PhyneAsyncBridge](bridgePtr)
+proc naganim_async_drain_wakeup*(bridgePtr: pointer): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  let b = cast[ptr NaganimAsyncBridge](bridgePtr)
   return cint(drainWakeupPipe(b))
 
-proc phyne_async_pop_completion*(
+proc naganim_async_pop_completion*(
   bridgePtr: pointer,
   outFutureId: ptr uint64,
   outStatus: ptr cint,
@@ -335,10 +335,10 @@ proc phyne_async_pop_completion*(
 ): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   ## Pops a single completion event from the lock-free ring.
   ## Returns 1 if an event was popped, 0 if empty.
-  let b = cast[ptr PhyneAsyncBridge](bridgePtr)
+  let b = cast[ptr NaganimAsyncBridge](bridgePtr)
   if b.isNil:
     return 0
-  var ev: PhyneCompletionEvent
+  var ev: NaganimCompletionEvent
   if not popCompletion(b, ev):
     return 0
   if not outFutureId.isNil: outFutureId[] = ev.futureId
@@ -358,7 +358,7 @@ proc phyne_async_pop_completion*(
       outStr[] = nil
   return 1
 
-proc phyne_async_submit_compute*(
+proc naganim_async_submit_compute*(
   bridgePtr: pointer,
   futureId: uint64,
   opCode: cint,
@@ -366,33 +366,33 @@ proc phyne_async_submit_compute*(
   argB: int64
 ): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   cAbiBoundary:
-    let b = cast[ptr PhyneAsyncBridge](bridgePtr)
+    let b = cast[ptr NaganimAsyncBridge](bridgePtr)
     submitComputeTask(b, futureId, opCode, argA, argB)
 
-proc phyne_async_channel_push_int*(
+proc naganim_async_channel_push_int*(
   bridgePtr: pointer,
   channelId: uint64,
   val: int64
 ): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   cAbiBoundary:
-    let b = cast[ptr PhyneAsyncBridge](bridgePtr)
+    let b = cast[ptr NaganimAsyncBridge](bridgePtr)
     if b.isNil:
-      raise newException(PhyneError, "Null PhyneAsyncBridge pointer")
-    pushCompletionEvent(b, PhyneCompletionEvent(
+      raise newException(NaganimError, "Null NaganimAsyncBridge pointer")
+    pushCompletionEvent(b, NaganimCompletionEvent(
       futureId: channelId,
       status: cint(pckChannelItem),
       intVal: val
     ))
 
-proc phyne_async_channel_close*(
+proc naganim_async_channel_close*(
   bridgePtr: pointer,
   channelId: uint64
 ): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   cAbiBoundary:
-    let b = cast[ptr PhyneAsyncBridge](bridgePtr)
+    let b = cast[ptr NaganimAsyncBridge](bridgePtr)
     if b.isNil:
-      raise newException(PhyneError, "Null PhyneAsyncBridge pointer")
-    pushCompletionEvent(b, PhyneCompletionEvent(
+      raise newException(NaganimError, "Null NaganimAsyncBridge pointer")
+    pushCompletionEvent(b, NaganimCompletionEvent(
       futureId: channelId,
       status: cint(pckChannelClosed),
       intVal: 0

@@ -7,7 +7,7 @@
 ##   raises `BufferExportedDefect` (`BufferError` in Python) on any resize (`setLen`, `add`)
 ##   while a Python `memoryview` or CFFI buffer view is active.
 ## - PEP 3118 `PyType_FromSpec` heap type with `Py_bf_getbuffer` and `Py_bf_releasebuffer` slots.
-## - C-ABI `phyne_buf_view_t` descriptor for `cffi` (`ffi.from_buffer`).
+## - C-ABI `naganim_buf_view_t` descriptor for `cffi` (`ffi.from_buffer`).
 
 import std/atomics
 import ./abi
@@ -15,9 +15,9 @@ import ./lifecycle
 import ./gc_bridge
 
 type
-  PhyneBufReleaseProc* = proc(ctx: pointer) {.cdecl, gcsafe, raises: [].}
+  NaganimBufReleaseProc* = proc(ctx: pointer) {.cdecl, gcsafe, raises: [].}
 
-  phyne_buf_view_t* {.exportc: "phyne_buf_view_t", pure.} = object
+  naganim_buf_view_t* {.exportc: "naganim_buf_view_t", pure.} = object
     data*: pointer
     len*: csize_t
     itemsize*: csize_t
@@ -25,7 +25,7 @@ type
     ndim*: cint
     format*: cstring
     owner_ctx*: pointer
-    release_fn*: PhyneBufReleaseProc
+    release_fn*: NaganimBufReleaseProc
 
   PinnedBufferHeader = object
     refCount: Atomic[int]
@@ -187,13 +187,13 @@ proc toSeq*[T](b: PinnedBuffer[T]): seq[T] {.gcsafe.} =
   result = newSeq[T](b.hdr.elemLen)
   copyMem(addr result[0], b.hdr.dataPtr, b.hdr.byteLen)
 
-proc toBufView*[T](b: PinnedBuffer[T]): phyne_buf_view_t {.gcsafe, raises: [].} =
-  ## Exports a zero-copy C-ABI `phyne_buf_view_t` descriptor and increments
-  ## `exportCount`. Caller must invoke `phyne_buf_release(addr view)` when done.
+proc toBufView*[T](b: PinnedBuffer[T]): naganim_buf_view_t {.gcsafe, raises: [].} =
+  ## Exports a zero-copy C-ABI `naganim_buf_view_t` descriptor and increments
+  ## `exportCount`. Caller must invoke `naganim_buf_release(addr view)` when done.
   if b.hdr.isNil:
-    return phyne_buf_view_t()
+    return naganim_buf_view_t()
   discard b.hdr.exportCount.fetchAdd(1, moAcquireRelease)
-  result = phyne_buf_view_t(
+  result = naganim_buf_view_t(
     data: b.hdr.dataPtr,
     len: csize_t(b.hdr.byteLen),
     itemsize: csize_t(b.hdr.itemSize),
@@ -204,7 +204,7 @@ proc toBufView*[T](b: PinnedBuffer[T]): phyne_buf_view_t {.gcsafe, raises: [].} 
     release_fn: releasePinnedExportC
   )
 
-proc phyne_buf_release*(view: ptr phyne_buf_view_t) {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_buf_release*(view: ptr naganim_buf_view_t) {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   if view.isNil:
     return
   if not view.release_fn.isNil:
@@ -245,7 +245,7 @@ proc `[]`*[T](s: ScopedSeqBuffer[T], idx: int): T {.inline, gcsafe.} =
 
 proc `[]=`*[T](s: ScopedSeqBuffer[T], idx: int, val: T) {.inline, gcsafe.} =
   if s.readonly:
-    raise newException(PhyneError, "Cannot mutate readonly ScopedSeqBuffer")
+    raise newException(NaganimError, "Cannot mutate readonly ScopedSeqBuffer")
   s.items[idx] = val
 
 proc add*[T](s: ScopedSeqBuffer[T], val: T) {.gcsafe.} =
@@ -273,7 +273,7 @@ proc releaseExport*[T](s: ScopedSeqBuffer[T]) {.inline, gcsafe, raises: [].} =
 type
   ScopedGetBufferProc = proc(ctx: pointer, exporter: PyObjectPtr, view: ptr Py_buffer, flags: cint): cint {.cdecl, gcsafe, raises: [].}
 
-  PhynePyBufferObj = object
+  NaganimPyBufferObj = object
     # 32-byte base header padding: accommodates both 16-byte standard abi3
     # PyObject header and 32-byte free-threaded abi3t (3.13t/3.14t) PyObject
     # header (ob_tid, _padding, ob_mutex, ob_gc_bits, ob_ref_local,
@@ -282,8 +282,8 @@ type
     hdr: ptr PinnedBufferHeader
     scopedCtx: pointer
     scopedGetBufferFn: ScopedGetBufferProc
-    scopedReleaseFn: PhyneBufReleaseProc
-    scopedDeallocFn: PhyneBufReleaseProc
+    scopedReleaseFn: NaganimBufReleaseProc
+    scopedDeallocFn: NaganimBufReleaseProc
 
 var
   gBufferTypeInitLock: AtomicFlag
@@ -292,11 +292,11 @@ var
   gBufferTypeSpec: PyType_Spec
   gEmptyScopedByte: byte = 0
 
-proc phynePyBufferGetBuffer(self: PyObjectPtr, view: ptr Py_buffer, flags: cint): cint {.cdecl, gcsafe, raises: [].} =
+proc naganimPyBufferGetBuffer(self: PyObjectPtr, view: ptr Py_buffer, flags: cint): cint {.cdecl, gcsafe, raises: [].} =
   if self.isNil or view.isNil:
     PyErr_SetString(PyExc_BufferError, "NULL buffer exporter or Py_buffer view")
     return -1
-  let obj = cast[ptr PhynePyBufferObj](self)
+  let obj = cast[ptr NaganimPyBufferObj](self)
   if not obj.scopedCtx.isNil and not obj.scopedGetBufferFn.isNil:
     return obj.scopedGetBufferFn(obj.scopedCtx, self, view, flags)
   let hdr = obj.hdr
@@ -320,20 +320,20 @@ proc phynePyBufferGetBuffer(self: PyObjectPtr, view: ptr Py_buffer, flags: cint)
   discard hdr.exportCount.fetchAdd(1, moAcquireRelease)
   return 0
 
-proc phynePyBufferReleaseBuffer(self: PyObjectPtr, view: ptr Py_buffer) {.cdecl, gcsafe, raises: [].} =
+proc naganimPyBufferReleaseBuffer(self: PyObjectPtr, view: ptr Py_buffer) {.cdecl, gcsafe, raises: [].} =
   if self.isNil:
     return
-  let obj = cast[ptr PhynePyBufferObj](self)
+  let obj = cast[ptr NaganimPyBufferObj](self)
   if not obj.scopedCtx.isNil and not obj.scopedReleaseFn.isNil:
     obj.scopedReleaseFn(obj.scopedCtx)
     return
   if not obj.hdr.isNil:
     releasePinnedExportC(cast[pointer](obj.hdr))
 
-proc phynePyBufferDealloc(self: PyObjectPtr) {.cdecl, gcsafe, raises: [].} =
+proc naganimPyBufferDealloc(self: PyObjectPtr) {.cdecl, gcsafe, raises: [].} =
   if self.isNil:
     return
-  let obj = cast[ptr PhynePyBufferObj](self)
+  let obj = cast[ptr NaganimPyBufferObj](self)
   if not obj.scopedCtx.isNil and not obj.scopedDeallocFn.isNil:
     let ctx = obj.scopedCtx
     let deallocFn = obj.scopedDeallocFn
@@ -361,13 +361,13 @@ proc ensurePyBufferType(): PyObjectPtr {.gcsafe, raises: [].} =
     cpuRelax()
   var tp = cast[PyObjectPtr](gBufferTypeObj.load(moRelaxed))
   if tp.isNil:
-    gBufferTypeSlots[0] = PyType_Slot(slot: Py_bf_getbuffer, pfunc: cast[pointer](phynePyBufferGetBuffer))
-    gBufferTypeSlots[1] = PyType_Slot(slot: Py_bf_releasebuffer, pfunc: cast[pointer](phynePyBufferReleaseBuffer))
-    gBufferTypeSlots[2] = PyType_Slot(slot: Py_tp_dealloc, pfunc: cast[pointer](phynePyBufferDealloc))
+    gBufferTypeSlots[0] = PyType_Slot(slot: Py_bf_getbuffer, pfunc: cast[pointer](naganimPyBufferGetBuffer))
+    gBufferTypeSlots[1] = PyType_Slot(slot: Py_bf_releasebuffer, pfunc: cast[pointer](naganimPyBufferReleaseBuffer))
+    gBufferTypeSlots[2] = PyType_Slot(slot: Py_tp_dealloc, pfunc: cast[pointer](naganimPyBufferDealloc))
     gBufferTypeSlots[3] = PyType_Slot(slot: 0, pfunc: nil)
     gBufferTypeSpec = PyType_Spec(
-      name: "phyne.PinnedBufferExporter",
-      basicsize: cint(sizeof(PhynePyBufferObj)),
+      name: "naganim.PinnedBufferExporter",
+      basicsize: cint(sizeof(NaganimPyBufferObj)),
       itemsize: 0,
       flags: Py_TPFLAGS_DEFAULT,
       slots: addr gBufferTypeSlots[0]
@@ -379,23 +379,23 @@ proc ensurePyBufferType(): PyObjectPtr {.gcsafe, raises: [].} =
   return tp
 
 proc toPyBufferExporterRaw*[T](b: PinnedBuffer[T]): PyObjectPtr {.gcsafe.} =
-  ## Creates a PEP 3118 `phyne.PinnedBufferExporter` Python object sharing
+  ## Creates a PEP 3118 `naganim.PinnedBufferExporter` Python object sharing
   ## zero-copy memory with `b` and tracking `exportCount` on `memoryview`
   ## acquisition/release.
   discard flushDeferredDecRefs()
   if b.hdr.isNil:
-    raise newException(PhyneConversionError, "Cannot export nil PinnedBuffer to Python")
+    raise newException(NaganimConversionError, "Cannot export nil PinnedBuffer to Python")
   let tp = ensurePyBufferType()
   if tp.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
   let emptyTuple = PyTuple_New(0)
   if emptyTuple.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
   let rawObj = PyType_GenericNew(tp, emptyTuple, nil)
   Py_DecRef(emptyTuple)
   if rawObj.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
-  let bufObj = cast[ptr PhynePyBufferObj](rawObj)
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
+  let bufObj = cast[ptr NaganimPyBufferObj](rawObj)
   discard b.hdr.refCount.fetchAdd(1, moAcquireRelease)
   bufObj.hdr = b.hdr
   bufObj.scopedCtx = nil
@@ -412,7 +412,7 @@ proc toPyMemoryViewRaw*[T](b: PinnedBuffer[T]): PyObjectPtr {.gcsafe.} =
   let mv = PyMemoryView_FromObject(exporter)
   Py_DecRef(exporter)
   if mv.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
   return mv
 
 proc toPyMemoryView*[T](b: PinnedBuffer[T]): PyObj {.gcsafe.} =
@@ -464,24 +464,24 @@ proc scopedSeqDeallocC[T](ctx: pointer) {.cdecl, gcsafe, raises: [].} =
   GC_unref(s)
 
 proc toPyBufferExporterRaw*[T](s: ScopedSeqBuffer[T]): PyObjectPtr {.gcsafe.} =
-  ## Creates a PEP 3118 `phyne.PinnedBufferExporter` Python object sharing
+  ## Creates a PEP 3118 `naganim.PinnedBufferExporter` Python object sharing
   ## zero-copy memory with `s` and tracking `s.exportCount` on `memoryview`
   ## acquisition/release so `s.add` / `s.setLen` raise `BufferExportedDefect`
   ## while exported.
   discard flushDeferredDecRefs()
   if s.isNil:
-    raise newException(PhyneConversionError, "Cannot export nil ScopedSeqBuffer to Python")
+    raise newException(NaganimConversionError, "Cannot export nil ScopedSeqBuffer to Python")
   let tp = ensurePyBufferType()
   if tp.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
   let emptyTuple = PyTuple_New(0)
   if emptyTuple.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
   let rawObj = PyType_GenericNew(tp, emptyTuple, nil)
   Py_DecRef(emptyTuple)
   if rawObj.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
-  let bufObj = cast[ptr PhynePyBufferObj](rawObj)
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
+  let bufObj = cast[ptr NaganimPyBufferObj](rawObj)
   GC_ref(s)
   bufObj.hdr = nil
   bufObj.scopedCtx = cast[pointer](s)
@@ -495,7 +495,7 @@ proc toPyMemoryViewRaw*[T](s: ScopedSeqBuffer[T]): PyObjectPtr {.gcsafe.} =
   let mv = PyMemoryView_FromObject(exporter)
   Py_DecRef(exporter)
   if mv.isNil:
-    raise newException(PhyneConversionError, fetchPythonErrorMessage())
+    raise newException(NaganimConversionError, fetchPythonErrorMessage())
   return mv
 
 proc toPyMemoryView*[T](s: ScopedSeqBuffer[T]): PyObj {.gcsafe.} =

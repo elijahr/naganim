@@ -1,4 +1,4 @@
-"""Lock-free `phyne.asyncio` Event-Loop Bridge & `AsyncChannel` (`async for`).
+"""Lock-free `naganim.asyncio` Event-Loop Bridge & `AsyncChannel` (`async for`).
 
 Integrates Nim's `lockfree` `TaskPool` and `BQueue128` completion ring directly
 with Python's `asyncio` event loop via `loop.add_reader(read_fd, ...)` with
@@ -11,13 +11,13 @@ import asyncio
 from collections import deque
 from typing import Any
 
-from ._cffi_loader import PhyneCffiModule, PhyneRuntimeError
+from ._cffi_loader import NaganimCffiModule, NaganimRuntimeError
 
 
 class AsyncChannel:
-    """Asynchronous stream consumer (`async for`) backed by `PhyneAsyncBridge`."""
+    """Asynchronous stream consumer (`async for`) backed by `NaganimAsyncBridge`."""
 
-    def __init__(self, bridge: PhyneAsyncBridge, channel_id: int) -> None:
+    def __init__(self, bridge: NaganimAsyncBridge, channel_id: int) -> None:
         self._bridge = bridge
         self.channel_id = channel_id
         self._items: deque[int] = deque()
@@ -58,12 +58,12 @@ class AsyncChannel:
         return await fut
 
 
-class PhyneAsyncBridge:
+class NaganimAsyncBridge:
     """Event-driven bridge between Python `asyncio` and Nim `lockfree` `TaskPool`."""
 
     def __init__(
         self,
-        cffi_mod: PhyneCffiModule,
+        cffi_mod: NaganimCffiModule,
         num_workers: int = 4,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -71,14 +71,14 @@ class PhyneAsyncBridge:
         self._ffi = cffi_mod.ffi
         self._lib = cffi_mod.lib
         self.loop = loop or asyncio.get_running_loop()
-        self._bridge_ptr = self._lib.phyne_async_bridge_create(int(num_workers))
+        self._bridge_ptr = self._lib.naganim_async_bridge_create(int(num_workers))
         if self._bridge_ptr == self._ffi.NULL:
-            raise PhyneRuntimeError("Failed to create PhyneAsyncBridge")
-        self._read_fd = int(self._lib.phyne_async_bridge_read_fd(self._bridge_ptr))
+            raise NaganimRuntimeError("Failed to create NaganimAsyncBridge")
+        self._read_fd = int(self._lib.naganim_async_bridge_read_fd(self._bridge_ptr))
         if self._read_fd < 0:
-            self._lib.phyne_async_bridge_destroy(self._bridge_ptr)
+            self._lib.naganim_async_bridge_destroy(self._bridge_ptr)
             self._bridge_ptr = self._ffi.NULL
-            raise PhyneRuntimeError("Invalid read_fd from PhyneAsyncBridge")
+            raise NaganimRuntimeError("Invalid read_fd from NaganimAsyncBridge")
 
         self._next_id = 1
         self._futures: dict[int, asyncio.Future[Any]] = {}
@@ -107,13 +107,13 @@ class PhyneAsyncBridge:
         if self._closed or self._bridge_ptr == self._ffi.NULL:
             return
         # Drain wakeup pipe AND flush deferred Py_DecRefs on the event loop thread
-        self._lib.phyne_async_drain_wakeup(self._bridge_ptr)
+        self._lib.naganim_async_drain_wakeup(self._bridge_ptr)
         self._drain_completions()
 
     def _drain_completions(self) -> None:
         while True:
             popped = int(
-                self._lib.phyne_async_pop_completion(
+                self._lib.naganim_async_pop_completion(
                     self._bridge_ptr,
                     self._out_id,
                     self._out_status,
@@ -148,16 +148,16 @@ class PhyneAsyncBridge:
                 if status == 0:
                     fut.set_result(int_val)
                 else:
-                    fut.set_exception(PhyneRuntimeError(err_msg or f"Nim async task error ({status})"))
+                    fut.set_exception(NaganimRuntimeError(err_msg or f"Nim async task error ({status})"))
 
     def submit_compute(self, op_code: int, arg_a: int, arg_b: int) -> asyncio.Future[int]:
         if self._closed:
-            raise PhyneRuntimeError("PhyneAsyncBridge is closed")
+            raise NaganimRuntimeError("NaganimAsyncBridge is closed")
         fut_id = self._alloc_id()
         fut: asyncio.Future[int] = self.loop.create_future()
         self._futures[fut_id] = fut
         rc = int(
-            self._lib.phyne_async_submit_compute(
+            self._lib.naganim_async_submit_compute(
                 self._bridge_ptr, fut_id, int(op_code), int(arg_a), int(arg_b)
             )
         )
@@ -172,18 +172,18 @@ class PhyneAsyncBridge:
 
     def create_channel(self) -> AsyncChannel:
         if self._closed:
-            raise PhyneRuntimeError("PhyneAsyncBridge is closed")
+            raise NaganimRuntimeError("NaganimAsyncBridge is closed")
         cid = self._alloc_id()
         ch = AsyncChannel(self, cid)
         self._channels[cid] = ch
         return ch
 
     def push_channel_int(self, channel_id: int, val: int) -> None:
-        rc = int(self._lib.phyne_async_channel_push_int(self._bridge_ptr, int(channel_id), int(val)))
+        rc = int(self._lib.naganim_async_channel_push_int(self._bridge_ptr, int(channel_id), int(val)))
         self._mod._check_status(rc)
 
     def close_channel(self, channel_id: int) -> None:
-        rc = int(self._lib.phyne_async_channel_close(self._bridge_ptr, int(channel_id)))
+        rc = int(self._lib.naganim_async_channel_close(self._bridge_ptr, int(channel_id)))
         self._mod._check_status(rc)
 
     def close(self) -> None:
@@ -196,14 +196,14 @@ class PhyneAsyncBridge:
                     pass
                 self._read_fd = -1
             if self._bridge_ptr != self._ffi.NULL:
-                self._lib.phyne_async_bridge_destroy(self._bridge_ptr)
+                self._lib.naganim_async_bridge_destroy(self._bridge_ptr)
                 self._bridge_ptr = self._ffi.NULL
             for fut in self._futures.values():
                 if not fut.done():
                     fut.cancel()
             self._futures.clear()
 
-    async def __aenter__(self) -> PhyneAsyncBridge:
+    async def __aenter__(self) -> NaganimAsyncBridge:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:

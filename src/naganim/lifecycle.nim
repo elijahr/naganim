@@ -1,8 +1,8 @@
-## phyne Runtime Lifecycle, Idempotent NimMain Guard & Exception Firewalls.
+## naganim Runtime Lifecycle, Idempotent NimMain Guard & Exception Firewalls.
 ##
 ## Implements:
 ## - Atomic once-only `NimMain()` initialization (`CRIT-02`)
-## - Thread-local C-ABI error state (`phyne_last_error`, `phyne_clear_error`)
+## - Thread-local C-ABI error state (`naganim_last_error`, `naganim_clear_error`)
 ## - Exception boundary firewalls (`cAbiBoundary`, `pyAbiBoundary`) catching both
 ##   `CatchableError` and `Defect` (`LOW-01`)
 
@@ -10,9 +10,9 @@ import std/atomics
 import ./abi
 
 type
-  PhyneError* = object of CatchableError
-  PhyneConversionError* = object of PhyneError
-  PhynePythonError* = object of PhyneError
+  NaganimError* = object of CatchableError
+  NaganimConversionError* = object of NaganimError
+  NaganimPythonError* = object of NaganimError
   BufferExportedDefect* = object of Defect
 
 proc NimMain() {.importc: "NimMain", cdecl, gcsafe, raises: [].}
@@ -21,7 +21,7 @@ var gNimMainInitialized*: Atomic[bool]
 var gRuntimeRefCount*: Atomic[int]
 
 # When NimMain() executes (either at standalone binary startup or on first
-# phyne_init_runtime() call in a shared library), mark gNimMainInitialized = true.
+# naganim_init_runtime() call in a shared library), mark gNimMainInitialized = true.
 gNimMainInitialized.store(true, moRelease)
 
 var gThreadLastError {.threadvar.}: string
@@ -40,26 +40,26 @@ proc getLastError*(): string {.gcsafe, raises: [].} =
 proc hasLastError*(): bool {.inline, gcsafe, raises: [].} =
   gThreadHasError
 
-proc phyne_clear_error*() {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_clear_error*() {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   gThreadLastError = ""
   gThreadHasError = false
 
-proc phyne_last_error*(): cstring {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_last_error*(): cstring {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   if not gThreadHasError or gThreadLastError.len == 0:
     return nil
   return cstring(gThreadLastError)
 
-proc phyne_set_last_error*(msg: cstring) {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_set_last_error*(msg: cstring) {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   if msg.isNil:
-    phyne_clear_error()
+    naganim_clear_error()
   else:
     gThreadLastError = $msg
     gThreadHasError = true
 
 var gDeferredFlushHook*: proc() {.cdecl, gcsafe, raises: [].} = nil
 
-proc phyne_init_runtime*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
-  ## Idempotent initialization of the Nim ORC runtime and phyne bridge.
+proc naganim_init_runtime*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  ## Idempotent initialization of the Nim ORC runtime and naganim bridge.
   ## Returns 0 on success, -1 on error.
   if not gNimMainInitialized.exchange(true, moAcquireRelease):
     NimMain()
@@ -68,7 +68,7 @@ proc phyne_init_runtime*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} 
     gDeferredFlushHook()
   return 0
 
-proc phyne_shutdown_runtime*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_shutdown_runtime*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   ## Flushes any pending deferred Python reference decrements when the caller
   ## holds a valid Python thread state, and decrements the runtime refcount.
   if not gDeferredFlushHook.isNil:
@@ -120,8 +120,8 @@ template cAbiBoundary*(body: untyped): cint =
   ## Catches both `CatchableError` and `Defect` (`LOW-01`) so Nim exceptions
   ## never unwind across foreign C stack frames.
   block:
-    discard phyne_init_runtime()
-    phyne_clear_error()
+    discard naganim_init_runtime()
+    naganim_clear_error()
     var statusCode: cint = 0
     try:
       body
@@ -141,11 +141,11 @@ template pyAbiBoundary*(body: untyped): PyObjectPtr =
   ## Catches `CatchableError`, `Defect`, and root `Exception` (`LOW-01`), translates
   ## them into Python exceptions via `PyErr_SetString`, and returns `nil`.
   block:
-    discard phyne_init_runtime()
+    discard naganim_init_runtime()
     var pyRes: PyObjectPtr = nil
     try:
       pyRes = body
-    except PhyneConversionError as e:
+    except NaganimConversionError as e:
       setLastError($e.name & ": " & e.msg)
       if PyErr_Occurred().isNil:
         PyErr_SetString(PyExc_TypeError, e.msg.cstring)

@@ -1,5 +1,5 @@
 [project]
-name = "phyne"
+name = "naganim"
 preferred_terminal = "auto" # Ghostty, Terminal, iTerm, none
 
 [swarm]

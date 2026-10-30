@@ -1,4 +1,4 @@
-"""Comprehensive Python & Asyncio Integration Test Suite for `phyne`.
+"""Comprehensive Python & Asyncio Integration Test Suite for `naganim`.
 
 Compiles `tests/python/nim_test_ext.nim` into a real native shared library and
 verifies:
@@ -7,8 +7,8 @@ verifies:
 3. Two-tier zero-copy Buffer Protocol (`PinnedBuffer` & `ScopedSeqBuffer` negative controls)
 4. Multi-threaded `PyObj` destruction on Nim `TaskPool` worker threads via the
    wait-free deferred `Py_DecRef` queue (`BQueue128` + `TreiberStack`)
-5. Lock-free `PhyneAsyncBridge` & `AsyncChannel` (`async for`) over `asyncio`
-6. `PhyneWriterPlugin` and `phyne-gen` CLI `.pyi` stub & CFFI `cdef` generation
+5. Lock-free `NaganimAsyncBridge` & `AsyncChannel` (`async for`) over `asyncio`
+6. `NaganimWriterPlugin` and `naganim-gen` CLI `.pyi` stub & CFFI `cdef` generation
 """
 
 from __future__ import annotations
@@ -21,15 +21,15 @@ from types import ModuleType
 
 import pytest
 
-from phyne import (
-    PhyneAsyncBridge,
-    PhyneCffiModule,
-    PhyneRuntimeError,
-    PhyneWriterPlugin,
+from naganim import (
+    NaganimAsyncBridge,
+    NaganimCffiModule,
+    NaganimRuntimeError,
+    NaganimWriterPlugin,
     load_abi3_extension,
     load_cffi_library,
 )
-from phyne._cli import main as phyne_cli_main
+from naganim._cli import main as naganim_cli_main
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXT_NIM_SRC = Path(__file__).resolve().parent / "nim_test_ext.nim"
@@ -37,7 +37,7 @@ EXT_NIM_SRC = Path(__file__).resolve().parent / "nim_test_ext.nim"
 
 @pytest.fixture(scope="session")
 def compiled_ext_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    build_dir = tmp_path_factory.mktemp("phyne_ext_build")
+    build_dir = tmp_path_factory.mktemp("naganim_ext_build")
     suffix = ".dylib" if sys.platform == "darwin" else (".dll" if sys.platform == "win32" else ".so")
     out_lib = build_dir / f"libnim_test_ext{suffix}"
     cmd = [
@@ -46,7 +46,7 @@ def compiled_ext_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "--app:lib",
         "--mm:orc",
         "--threads:on",
-        "-d:phyneExtensionModule",
+        "-d:naganimExtensionModule",
         f"--out:{out_lib}",
         str(EXT_NIM_SRC),
     ]
@@ -57,7 +57,7 @@ def compiled_ext_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def cffi_ext(compiled_ext_path: Path) -> PhyneCffiModule:
+def cffi_ext(compiled_ext_path: Path) -> NaganimCffiModule:
     return load_cffi_library(compiled_ext_path)
 
 
@@ -69,7 +69,7 @@ def abi3_ext(compiled_ext_path: Path) -> ModuleType:
 # ---------------------------------------------------------------------------
 # 1. CFFI ABI Mode Tests & Negative Controls
 # ---------------------------------------------------------------------------
-def test_cffi_primitives_and_strings(cffi_ext: PhyneCffiModule) -> None:
+def test_cffi_primitives_and_strings(cffi_ext: NaganimCffiModule) -> None:
     assert cffi_ext.add_ints(120, -45) == 75
     assert cffi_ext.scale_float(2.5, 4.0) == 10.0
     assert cffi_ext.greet("Sorrel") == "Hello from Nim, Sorrel!"
@@ -77,7 +77,7 @@ def test_cffi_primitives_and_strings(cffi_ext: PhyneCffiModule) -> None:
     assert cffi_ext.negate_bool(False) is True
 
 
-def test_cffi_zero_copy_pinned_buffer(cffi_ext: PhyneCffiModule) -> None:
+def test_cffi_zero_copy_pinned_buffer(cffi_ext: NaganimCffiModule) -> None:
     with cffi_ext.make_pinned_bytes(5) as buf_owner:
         assert buf_owner.byte_length == 5
         assert buf_owner.readonly is False
@@ -92,7 +92,7 @@ def test_cffi_zero_copy_pinned_buffer(cffi_ext: PhyneCffiModule) -> None:
     assert cffi_ext.last_pinned_export_count() == 0
 
 
-def test_cffi_negative_controls(cffi_ext: PhyneCffiModule) -> None:
+def test_cffi_negative_controls(cffi_ext: NaganimCffiModule) -> None:
     with pytest.raises(TypeError, match="takes exactly 2 argument"):
         cffi_ext.add_ints(1)
 
@@ -105,10 +105,10 @@ def test_cffi_negative_controls(cffi_ext: PhyneCffiModule) -> None:
     with pytest.raises(TypeError, match="must be str"):
         cffi_ext.greet(12345)
 
-    with pytest.raises(PhyneRuntimeError, match="ValueError: cffi negative control"):
+    with pytest.raises(NaganimRuntimeError, match="ValueError: cffi negative control"):
         cffi_ext.fail_with_value_error("cffi negative control")
 
-    with pytest.raises(PhyneRuntimeError, match="IndexDefect: deliberate bounds defect"):
+    with pytest.raises(NaganimRuntimeError, match="IndexDefect: deliberate bounds defect"):
         cffi_ext.fail_with_defect()
 
 
@@ -176,11 +176,11 @@ def test_abi3_negative_controls(abi3_ext: ModuleType) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Lock-Free `phyne.asyncio` Event-Loop Bridge & `AsyncChannel` Tests
+# 3. Lock-Free `naganim.asyncio` Event-Loop Bridge & `AsyncChannel` Tests
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_asyncio_bridge_taskpool_offloading_and_channel(cffi_ext: PhyneCffiModule) -> None:
-    async with PhyneAsyncBridge(cffi_ext, num_workers=4) as bridge:
+async def test_asyncio_bridge_taskpool_offloading_and_channel(cffi_ext: NaganimCffiModule) -> None:
+    async with NaganimAsyncBridge(cffi_ext, num_workers=4) as bridge:
         # Single TaskPool sum_squares(1, 100) = 338350
         res = await bridge.sum_squares(1, 100)
         assert res == 338350
@@ -192,7 +192,7 @@ async def test_asyncio_bridge_taskpool_offloading_and_channel(cffi_ext: PhyneCff
         assert results == expected
 
         # Negative control: task raising error on worker thread rejects the asyncio.Future
-        with pytest.raises(PhyneRuntimeError, match="deliberate worker failure"):
+        with pytest.raises(NaganimRuntimeError, match="deliberate worker failure"):
             await bridge.submit_compute(2, 0, 0)
 
         # AsyncChannel (`async for`) streaming values via lock-free ring + pipe wakeup
@@ -214,12 +214,12 @@ async def test_asyncio_bridge_taskpool_offloading_and_channel(cffi_ext: PhyneCff
 
 
 # ---------------------------------------------------------------------------
-# 4. `PhyneWriterPlugin` & `phyne-gen` CLI Stub/CDEF Generation Tests
+# 4. `NaganimWriterPlugin` & `naganim-gen` CLI Stub/CDEF Generation Tests
 # ---------------------------------------------------------------------------
 def test_writer_plugin_and_cli(compiled_ext_path: Path, tmp_path: Path) -> None:
     pyi_out = tmp_path / "nim_test_ext.pyi"
     cdef_out = tmp_path / "nim_test_ext.h"
-    rc = phyne_cli_main(
+    rc = naganim_cli_main(
         [
             str(compiled_ext_path),
             "--out-pyi",
@@ -234,7 +234,7 @@ def test_writer_plugin_and_cli(compiled_ext_path: Path, tmp_path: Path) -> None:
 
     expected_pyi = "\n".join(
         [
-            "# Auto-generated PEP 484 stub for phyne module `nim_test_ext`",
+            "# Auto-generated PEP 484 stub for naganim module `nim_test_ext`",
             "from __future__ import annotations",
             "from typing import Any",
             "",
@@ -305,5 +305,5 @@ def test_writer_plugin_and_cli(compiled_ext_path: Path, tmp_path: Path) -> None:
         ]
     )
     assert pyi_text == expected_pyi
-    assert "int phyne_c_add_ints(int64_t a, int64_t b, int64_t* out_res);" in cdef_text
-    assert "int phyne_c_make_pinned_bytes(int64_t n, phyne_buf_view_t* out_res);" in cdef_text
+    assert "int naganim_c_add_ints(int64_t a, int64_t b, int64_t* out_res);" in cdef_text
+    assert "int naganim_c_make_pinned_bytes(int64_t n, naganim_buf_view_t* out_res);" in cdef_text

@@ -1,4 +1,4 @@
-"""CLI entrypoint (`phyne-gen`) for generating `.pyi` stubs and CFFI `cdef` declarations."""
+"""CLI entrypoint (`naganim-gen`) for generating `.pyi` stubs and CFFI `cdef` declarations."""
 
 from __future__ import annotations
 
@@ -6,17 +6,17 @@ import argparse
 from pathlib import Path
 
 from ._cffi_loader import load_cffi_library
-from .writer_plugin import PhyneWriterPlugin
+from .writer_plugin import NaganimWriterPlugin
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="phyne-gen",
-        description="Generate PEP 484 .pyi stubs and CFFI cdef declarations from a phyne IR file or compiled shared library.",
+        prog="naganim-gen",
+        description="Generate PEP 484 .pyi stubs and CFFI cdef declarations from a naganim IR file or compiled shared library.",
     )
     parser.add_argument(
         "source",
-        help="Path to a .phyne.ir.json file or a compiled phyne shared library (.so/.dylib/.dll)",
+        help="Path to a .naganim.ir.json file or a compiled naganim shared library (.so/.dylib/.dll)",
     )
     parser.add_argument(
         "--out-pyi",
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(f"Source file not found: {src}")
 
     if src.suffix == ".json":
-        plugin = PhyneWriterPlugin.from_ir_file(src)
+        plugin = NaganimWriterPlugin.from_ir_file(src)
     else:
         mod = load_cffi_library(src)
         plugin = mod.plugin

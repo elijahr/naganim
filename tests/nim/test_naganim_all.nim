@@ -1,4 +1,4 @@
-## Comprehensive Nim Test Suite for `phyne`.
+## Comprehensive Nim Test Suite for `naganim`.
 ##
 ## Exercises all core subsystems with structural equality assertions and
 ## negative controls:
@@ -9,16 +9,16 @@
 ## 4. Bidirectional type marshaling (`toPy` / `fromPy`) & negative controls
 ## 5. Two-tier zero-copy Buffer Protocol (`PinnedBuffer`, `ScopedSeqBuffer`, PEP 3118)
 ## 6. Dual-target `{.exportpy.}` C-ABI & `abi3` wrappers + IR JSON generation
-## 7. Lock-free `PhyneAsyncBridge` + OS pipe wakeup + `TaskPool` offloading
+## 7. Lock-free `NaganimAsyncBridge` + OS pipe wakeup + `TaskPool` offloading
 
 import std/[unittest, options, tables, strutils, atomics]
 import lockfree/taskpool
-import ../../src/phyne
+import ../../src/naganim
 
 # Ensure embedded CPython runtime is initialized for standalone Nim tests
 if Py_IsInitialized() == 0:
   Py_InitializeEx(0)
-discard phyne_init_runtime()
+discard naganim_init_runtime()
 
 # Sample exported procs to test {.exportpy.} and IR metadata
 proc exportedAdd*(a: int64, b: int64): int64 {.exportpy.} =
@@ -42,7 +42,7 @@ proc exportedWillFail*(x: int64): int64 {.exportpy.} =
     raise newException(IndexDefect, "simulated defect on 999")
   return x * 2
 
-phyneInitModule("phyne_nim_test_mod", "Test module for phyne")
+naganimInitModule("naganim_nim_test_mod", "Test module for naganim")
 
 var gWorkerDropDoneCount: Atomic[int]
 
@@ -57,34 +57,34 @@ proc nonPythonWorkerDropPyObj(arg: pointer) {.nimcall, gcsafe.} =
   discard gWorkerDropDoneCount.fetchAdd(1, moRelease)
 
 suite "1. Runtime Lifecycle & Exception Firewalls":
-  test "phyne_init_runtime is idempotent and thread-local error state round-trips":
-    check phyne_init_runtime() == 0
-    check phyne_init_runtime() == 0
-    phyne_clear_error()
-    check phyne_last_error() == nil
+  test "naganim_init_runtime is idempotent and thread-local error state round-trips":
+    check naganim_init_runtime() == 0
+    check naganim_init_runtime() == 0
+    naganim_clear_error()
+    check naganim_last_error() == nil
 
-    phyne_set_last_error("custom error 42")
-    check $phyne_last_error() == "custom error 42"
-    phyne_clear_error()
-    check phyne_last_error() == nil
-    check phyne_shutdown_runtime() == 0
+    naganim_set_last_error("custom error 42")
+    check $naganim_last_error() == "custom error 42"
+    naganim_clear_error()
+    check naganim_last_error() == nil
+    check naganim_shutdown_runtime() == 0
 
   test "cAbiBoundary catches CatchableError and Defect without unwinding":
     let rcOk = cAbiBoundary:
       discard 1 + 1
     check rcOk == 0
-    check phyne_last_error() == nil
+    check naganim_last_error() == nil
 
     let rcErr = cAbiBoundary:
       raise newException(ValueError, "bad value")
     check rcErr == -1
-    check $phyne_last_error() == "ValueError: bad value"
+    check $naganim_last_error() == "ValueError: bad value"
 
     let rcDefect = cAbiBoundary:
       raise newException(IndexDefect, "out of bounds")
     check rcDefect == -2
-    check $phyne_last_error() == "IndexDefect: out of bounds"
-    phyne_clear_error()
+    check $naganim_last_error() == "IndexDefect: out of bounds"
+    naganim_clear_error()
 
 suite "2. PyObj ORC Reference Counting & Wait-Free Deferred DecRef Queue":
   test "PyObj copy, sink, and stealToPointer maintain exact CPython ob_refcnt":
@@ -186,8 +186,8 @@ suite "3. Bidirectional Type Marshaling & Negative Controls":
     let fVal = toPy(3.141592653589793)
     check fromPy(fVal, float64) == 3.141592653589793
 
-    let sVal = toPy("phyne 🚀 unicode string")
-    check fromPy(sVal, string) == "phyne 🚀 unicode string"
+    let sVal = toPy("naganim 🚀 unicode string")
+    check fromPy(sVal, string) == "naganim 🚀 unicode string"
 
     let emptyStr = toPy("")
     check fromPy(emptyStr, string) == ""
@@ -220,25 +220,25 @@ suite "3. Bidirectional Type Marshaling & Negative Controls":
 
   test "Negative controls: type mismatches, bool-as-int rejection, arity errors, overflow":
     let pyStr = toPy("not an int")
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyStr, int64)
 
     let pyBool = toPy(true)
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyBool, int64)
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyBool, uint64)
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyBool, float64)
 
     let pyInt = toPy(1000'i64)
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyInt, bool)
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyInt, int8) # 1000 overflows int8
 
     let pyTup2 = toPy((1'i64, 2'i64))
-    expect(PhyneConversionError):
+    expect(NaganimConversionError):
       discard fromPy(pyTup2, (int64, int64, int64))
 
   test "Calling Python standard library modules (math, json) from Nim":
@@ -265,7 +265,7 @@ suite "4. Two-Tier Zero-Copy Buffer Protocol (PinnedBuffer & ScopedSeqBuffer)":
     check pbuf.exportCount == 1
     check int(cView.len) == 4 * sizeof(int64)
     check int(cView.itemsize) == sizeof(int64)
-    phyne_buf_release(addr cView)
+    naganim_buf_release(addr cView)
     check pbuf.exportCount == 0
 
     # Export as PEP 3118 Python memoryview and mutate through Python memoryview
@@ -315,52 +315,52 @@ suite "4. Two-Tier Zero-Copy Buffer Protocol (PinnedBuffer & ScopedSeqBuffer)":
 suite "5. Dual-Target {.exportpy.} Wrappers & IR Metadata":
   test "C-ABI and PyCFunction wrappers execute and enforce negative controls":
     var outAdd: int64 = 0
-    check phyne_c_exportedAdd(17, 25, addr outAdd) == 0
+    check naganim_c_exportedAdd(17, 25, addr outAdd) == 0
     check outAdd == 42
 
     var outStr: cstring = nil
-    check phyne_c_exportedGreet("Nim", addr outStr) == 0
+    check naganim_c_exportedGreet("Nim", addr outStr) == 0
     check $outStr == "Hello, Nim!"
 
-    # Negative controls on phyne_c_exportedWillFail
+    # Negative controls on naganim_c_exportedWillFail
     var outFail: int64 = 0
-    check phyne_c_exportedWillFail(-5, addr outFail) == -1
-    check $phyne_last_error() == "ValueError: negative input disallowed: -5"
+    check naganim_c_exportedWillFail(-5, addr outFail) == -1
+    check $naganim_last_error() == "ValueError: negative input disallowed: -5"
 
-    check phyne_c_exportedWillFail(999, addr outFail) == -2
-    check $phyne_last_error() == "IndexDefect: simulated defect on 999"
-    phyne_clear_error()
+    check naganim_c_exportedWillFail(999, addr outFail) == -2
+    check $naganim_last_error() == "IndexDefect: simulated defect on 999"
+    naganim_clear_error()
 
     # PyCFunction wrapper test
     let argsTup = toPy((100'i64, 23'i64))
-    let pyRes = phyne_py_exportedAdd(nil, argsTup.raw)
+    let pyRes = naganim_py_exportedAdd(nil, argsTup.raw)
     check pyRes != nil
     check fromPyRaw(pyRes, int64) == 123
     Py_DecRef(pyRes)
 
     # Arity mismatch negative control on PyCFunction
     let badArgs = toPy((100'i64,))
-    let badRes = phyne_py_exportedAdd(nil, badArgs.raw)
+    let badRes = naganim_py_exportedAdd(nil, badArgs.raw)
     check badRes == nil
     check PyErr_Occurred() != nil
     PyErr_Clear()
 
-    let irJson = $phyne_module_ir_json()
-    check irJson.startsWith("{\n  \"module\": \"phyne_nim_test_mod\"")
+    let irJson = $naganim_module_ir_json()
+    check irJson.startsWith("{\n  \"module\": \"naganim_nim_test_mod\"")
 
-suite "6. Lock-Free PhyneAsyncBridge & TaskPool Offloading":
-  test "PhyneAsyncBridge offloads parallel sum of squares to TaskPool and signals wakeup pipe":
-    let bridge = phyne_async_bridge_create(4)
+suite "6. Lock-Free NaganimAsyncBridge & TaskPool Offloading":
+  test "NaganimAsyncBridge offloads parallel sum of squares to TaskPool and signals wakeup pipe":
+    let bridge = naganim_async_bridge_create(4)
     check bridge != nil
-    let rfd = phyne_async_bridge_read_fd(bridge)
+    let rfd = naganim_async_bridge_read_fd(bridge)
     check rfd >= 0
 
-    check phyne_async_submit_compute(bridge, 101'u64, 1, 1, 10) == 0
+    check naganim_async_submit_compute(bridge, 101'u64, 1, 1, 10) == 0
     # Wait for TaskPool completion
-    let bPtr = cast[ptr PhyneAsyncBridge](bridge)
+    let bPtr = cast[ptr NaganimAsyncBridge](bridge)
     bPtr.pool.sync()
 
-    let drainedBytes = phyne_async_drain_wakeup(bridge)
+    let drainedBytes = naganim_async_drain_wakeup(bridge)
     check drainedBytes == 1
 
     var futId: uint64 = 0
@@ -368,9 +368,9 @@ suite "6. Lock-Free PhyneAsyncBridge & TaskPool Offloading":
     var intVal: int64 = 0
     var floatVal: float64 = 0.0
     var strVal: cstring = nil
-    check phyne_async_pop_completion(bridge, addr futId, addr status, addr intVal, addr floatVal, addr strVal) == 1
+    check naganim_async_pop_completion(bridge, addr futId, addr status, addr intVal, addr floatVal, addr strVal) == 1
     check futId == 101'u64
     check status == 0
     check intVal == 385'i64 # 1^2 + 2^2 + ... + 10^2 = 385
 
-    phyne_async_bridge_destroy(bridge)
+    naganim_async_bridge_destroy(bridge)

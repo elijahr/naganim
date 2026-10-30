@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "phyne"
+name = "naganim"
 version = "0.1.0"
 description = "High-performance bidirectional Nim-Python bridge supporting CPython Stable ABI (abi3/abi3t), CFFI, PEP 3118 zero-copy buffers, and lock-free asyncio"
 readme = "README.md"
@@ -20,10 +20,10 @@ dev = [
 ]
 
 [project.scripts]
-phyne = "phyne._cli:main"
+naganim = "naganim._cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/phyne"]
+packages = ["python/naganim"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]

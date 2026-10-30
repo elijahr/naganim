@@ -6,7 +6,7 @@
 
 # Nim build artifacts
 nimcache/
-tests/nim/test_phyne_all
+tests/nim/test_naganim_all
 *.dylib
 *.so
 *.dll

@@ -11,8 +11,8 @@
 
 This document establishes the empirical ground truth for the 5-component Nim $\leftrightarrow$ Python interop ecosystem:
 
-1. **`phyne`** (`/Users/eek/Development/phyne`, PyPI: `phyne`, Nimble: `phyne`) — Bidirectional Nim $\leftrightarrow$ Python FFI & native extension bridge targeting the Python Limited C API (`Py_LIMITED_API = 0x030B0000`, `abi3`) and Free-Threaded Python (`3.13t`–`3.15t`, `abi3t` via `Py_mod_gil = Py_MOD_GIL_NOT_USED`), with dual CFFI API/ABI support, wait-free deferred `Py_DecRef` reclamation backed by `elijahr/lockfree`, a two-tier zero-copy Buffer Protocol (`Py_buffer`), compile-time `{.pyexport.}` macro IR emission, an `asyncio` zero-syscall edge-triggered event loop bridge (`phyne/asyncio`), and Nimony compatibility.
-2. **`lockless`** (`/Users/eek/Development/lockless`, PyPI: `lockless`) — Standalone Python concurrency and zero-copy streaming/DSP library wrapping `elijahr/lockfree` via `phyne` and `headerkit`.
+1. **`naganim`** (`/Users/eek/Development/naganim`, PyPI: `naganim`, Nimble: `naganim`) — Bidirectional Nim $\leftrightarrow$ Python FFI & native extension bridge targeting the Python Limited C API (`Py_LIMITED_API = 0x030B0000`, `abi3`) and Free-Threaded Python (`3.13t`–`3.15t`, `abi3t` via `Py_mod_gil = Py_MOD_GIL_NOT_USED`), with dual CFFI API/ABI support, wait-free deferred `Py_DecRef` reclamation backed by `elijahr/lockfree`, a two-tier zero-copy Buffer Protocol (`Py_buffer`), compile-time `{.pyexport.}` macro IR emission, an `asyncio` zero-syscall edge-triggered event loop bridge (`naganim/asyncio`), and Nimony compatibility.
+2. **`lockless`** (`/Users/eek/Development/lockless`, PyPI: `lockless`) — Standalone Python concurrency and zero-copy streaming/DSP library wrapping `elijahr/lockfree` via `naganim` and `headerkit`.
 3. **`headerkit` Upgrades** (`/Users/eek/Development/headerkit`) — First-class Nim `--header` C-ABI cleanup (`NimCleanupTransform`), `-b` CLI short flag, auto-detection of Nim `libpath` (`nimbase.h`) in `LibclangBackend`, `nimbase.h` macro normalization in `TreeSitterBackend`, `nim jsondoc` enrichment, and PEP 484 `.pyi` stub generation (`PyiWriter`, `-w pyi`).
 4. **`elijahr/lockfree` C-ABI Upgrades** (`/Users/eek/Development/lockfree`) — Two-phase zero-copy `StreamRing`/`StreamBuffer` C ABI (`lf_stream_reserve_write`, `lf_stream_commit_write`, `lf_stream_peek_read`, `lf_stream_consume_read`), 0-to-1 empty-to-non-empty transition detection (`out_was_empty`) on `lf_push_ex` and `lf_bqueue128_push_ex`, and destructor drain verification across all C ABI collection `destroy` routines.
 5. **`axiomantic/polyform` Upgrades** (`axiomantic/polyform`) — Polyglot Nim + Python project generator templates with `has_nim` + `has_python` + `headerkit` integration and CI matrices covering CPython `3.12`–`3.15`, Free-Threaded `3.13t`–`3.15t`, and `nimony`.
@@ -109,7 +109,7 @@ Every assertion in this document is grounded in tool-verified file paths and exa
 - **Identified Constraint for Python Zero-Copy (`memoryview` / `Py_buffer`)**:
   - Python's Buffer Protocol (`PyMemoryView_FromMemory` / `bf_getbuffer`) and CFFI out-pointer calls require a single contiguous `(void** out_ptr, size_t* out_len)` reservation with `lf_status_t` status codes (`LF_OK`, `LF_ERR_FULL`, `LF_ERR_EMPTY`, `LF_ERR_INVALID_ARG`).
   - Note (`[CRIT-01]`): `initStreamRing` (`streambuffer.nim:295-296`) currently raises `ValueError` when `useVirtualMirror == true`, so `StreamRing` is always created with `use_virtual_mirror = false`, and `iov.first` provides the contiguous slice up to the physical wrap boundary (`min(avail, cap - offset)`).
-  - Adding `lf_stream_reserve_write(ring, min_bytes, out_ptr, out_avail_len)`, `lf_stream_commit_write(ring, bytes_written)`, `lf_stream_peek_read(ring, out_ptr, out_avail_len)`, and `lf_stream_consume_read(ring, bytes_consumed)` to `include/lockfree_streambuffer.h` and `src/lockfree/cabi.nim` provides an ergonomic, zero-struct-return C ABI for `phyne` and `lockless.StreamBuffer`.
+  - Adding `lf_stream_reserve_write(ring, min_bytes, out_ptr, out_avail_len)`, `lf_stream_commit_write(ring, bytes_written)`, `lf_stream_peek_read(ring, out_ptr, out_avail_len)`, and `lf_stream_consume_read(ring, bytes_consumed)` to `include/lockfree_streambuffer.h` and `src/lockfree/cabi.nim` provides an ergonomic, zero-struct-return C ABI for `naganim` and `lockless.StreamBuffer`.
 
 ### 4.3 0-to-1 Empty-to-Non-Empty Transition Detection (`was_empty`) Gap
 - **Current Implementation**:
@@ -117,13 +117,13 @@ Every assertion in this document is grounded in tool-verified file paths and exa
   - In `BQueue` MPMC push (`/Users/eek/Development/lockfree/src/lockfree/typestates/mpmc_push.nim:61-96`), `tryClaim` wins `queue.tail.compareExchangeWeak(expected, pos + 1, moRelaxed, moRelaxed)` at line `79`, and `complete` stores `pos + 1` with `moRelease` at line `95`.
   - In `Queue` unbounded MPMC push (`/Users/eek/Development/lockfree/src/lockfree/queue.nim:392, 404`), `itemCount: Atomic[int]` tracks live item count.
   - Neither `lf_push` (`src/lockfree/cabi.nim:831-837`) nor `lf_bqueue128_push` (`src/lockfree/cabi.nim:4519-4525`) currently reports whether the push transitioned the queue from empty (`0` items) to non-empty (`1` item).
-- **Why This Matters for `phyne/asyncio` and `lockless`**:
+- **Why This Matters for `naganim/asyncio` and `lockless`**:
   - Calling `write(eventfd)` or `send(wakeup_fd)` on every `push` incurs a kernel syscall (~800–1500 ns) per item, destroying lock-free throughput (~15–40 ns per item).
   - By exposing `lf_push_ex(prod, item, out_was_empty)` and `lf_bqueue128_push_ex(queue, item, out_was_empty)`:
     - In `BQueue128`: `was_empty = (self.head.load(moAcquire) == pos)` at the moment `pos` is published.
     - In `BoundedQueueImpl` (`BQueue`): `was_empty = (q.rawQueue.head.load(moAcquire) == pos)` at claim/publish.
     - In `UnboundedQueueImpl` (`Queue`): `was_empty = (prevCount == 0)` where `prevCount` is observed on `itemCount`.
-  - Combined with an atomic consumer `sleeping: Atomic[bool]` flag in `phyne/asyncio` (`SeqCst`Dekker-style fence), the producer executes **zero syscalls** whenever the queue is already non-empty or the consumer is actively polling!
+  - Combined with an atomic consumer `sleeping: Atomic[bool]` flag in `naganim/asyncio` (`SeqCst`Dekker-style fence), the producer executes **zero syscalls** whenever the queue is already non-empty or the consumer is actively polling!
 
 ### 4.4 C ABI Collection Destructor Drain Audit across `src/lockfree/cabi.nim`
 We audited all 19 C ABI sections in `/Users/eek/Development/lockfree/src/lockfree/cabi.nim` to verify whether registered `destructor` callbacks are invoked for remaining items upon `*_destroy`:
@@ -167,27 +167,27 @@ flowchart TD
         HKParse --> HKTransform --> HKWriters
     end
 
-    subgraph PhyneRepo["/Users/eek/Development/phyne (Nim + Python Bridge)"]
-        PhyneABI["phyne/abi3 (Py_LIMITED_API 0x030B0000 + abi3t Py_MOD_GIL_NOT_USED)"]
-        PhyneGC["phyne/gc_bridge (Wait-Free Deferred Py_DecRef Queue via BQueue128)"]
-        PhyneBuf["phyne/buffer (Two-Tier Zero-Copy Py_buffer / memoryview)"]
-        PhyneAsync["phyne/asyncio (MPSC Completion Ring + 0-to-1 Edge Wakeup Coalescer)"]
-        PhyneMacro["{.pyexport.} Macro -> .phyne.ir.json -> headerkit -> .pyi + CFFI"]
+    subgraph NaganimRepo["/Users/eek/Development/naganim (Nim + Python Bridge)"]
+        NaganimABI["naganim/abi3 (Py_LIMITED_API 0x030B0000 + abi3t Py_MOD_GIL_NOT_USED)"]
+        NaganimGC["naganim/gc_bridge (Wait-Free Deferred Py_DecRef Queue via BQueue128)"]
+        NaganimBuf["naganim/buffer (Two-Tier Zero-Copy Py_buffer / memoryview)"]
+        NaganimAsync["naganim/asyncio (MPSC Completion Ring + 0-to-1 Edge Wakeup Coalescer)"]
+        NaganimMacro["{.pyexport.} Macro -> .naganim.ir.json -> headerkit -> .pyi + CFFI"]
     end
 
     subgraph LocklessRepo["/Users/eek/Development/lockless (Python Package)"]
         LocklessPy["import lockless\n(BQueue128, SpscQueue, MpmcQueue, StreamBuffer, BroadcastRing,\nConcurrentDict/Ctrie, SkipListMap, Channel, TaskPool)"]
     end
 
-    LFCABI -->|"Static/Shared C ABI + Nim Import"| PhyneGC
+    LFCABI -->|"Static/Shared C ABI + Nim Import"| NaganimGC
     LFCABI -->|"C ABI + Zero-Copy StreamRing"| LocklessPy
-    PhyneABI --> LocklessPy
-    PhyneGC --> LocklessPy
-    PhyneBuf --> LocklessPy
-    PhyneAsync --> LocklessPy
-    PhyneMacro --> HKTransform
+    NaganimABI --> LocklessPy
+    NaganimGC --> LocklessPy
+    NaganimBuf --> LocklessPy
+    NaganimAsync --> LocklessPy
+    NaganimMacro --> HKTransform
     HKWriters --> LocklessPy
-    HKWriters --> PhyneRepo
+    HKWriters --> NaganimRepo
 ```
 
 ---
@@ -196,10 +196,10 @@ flowchart TD
 
 1. **Free-Threaded Python (`3.13t`/`3.14t`/`3.15t`) vs. Legacy GIL Reference Counting**:
    - Calling `Py_DECREF(obj)` from a non-Python Nim thread (`TaskPool` worker or `lockfree` destructor callback) when the thread does not hold an attached `PyThreadState` causes immediate memory corruption or segfaults on GIL-enabled builds (`3.12`–`3.15`), and contends on biased reference counting cross-thread paths in `3.13t+`.
-   - **Constraint**: `PyObj.=destroy` in Nim MUST check whether the current OS thread holds an active Python thread state; if not, it MUST enqueue the `PyObject*` into a lock-free `BQueue128` deferred-decref queue drained automatically on the next `phyne` entry/exit or event-loop wakeup on a Python thread.
+   - **Constraint**: `PyObj.=destroy` in Nim MUST check whether the current OS thread holds an active Python thread state; if not, it MUST enqueue the `PyObject*` into a lock-free `BQueue128` deferred-decref queue drained automatically on the next `naganim` entry/exit or event-loop wakeup on a Python thread.
 2. **Buffer Protocol Lifetime vs. Nim ARC/ORC Reallocation**:
    - If Python holds a `memoryview` over a Nim `seq[T]` or `string`, and Nim mutates or reallocates that `seq`/`string`, Python's `memoryview.buf` becomes a dangling pointer (Use-After-Free).
-   - **Constraint**: `phyne/buffer` must enforce a Two-Tier contract: Tier 1 (`PinnedBuffer[T]` / `StreamRing`) uses non-relocatable shared-heap or `mmap` memory with atomic `exportCount: Atomic[int]` pin tracking; Tier 2 (`seq[T]`/`string` view) increments a dynamic export counter on `bf_getbuffer` and decrements on `bf_releasebuffer`, raising `BufferExportedDefect` if Nim attempts to resize/dispose while `exportCount > 0`.
+   - **Constraint**: `naganim/buffer` must enforce a Two-Tier contract: Tier 1 (`PinnedBuffer[T]` / `StreamRing`) uses non-relocatable shared-heap or `mmap` memory with atomic `exportCount: Atomic[int]` pin tracking; Tier 2 (`seq[T]`/`string` view) increments a dynamic export counter on `bf_getbuffer` and decrements on `bf_releasebuffer`, raising `BufferExportedDefect` if Nim attempts to resize/dispose while `exportCount > 0`.
 3. **Nimony (Nim 3.0) AST & Pragma Restrictions**:
    - Nimony replaces legacy VM macro hacks with structured NIF/typed macro semantics.
-   - **Constraint**: `phyne/nimony_compat` must isolate compiler-specific macro introspection so `phyne/abi3`, `phyne/marshal`, and `phyne/buffer` compile cleanly under both Nim 2.x and Nimony.
+   - **Constraint**: `naganim/nimony_compat` must isolate compiler-specific macro introspection so `naganim/abi3`, `naganim/marshal`, and `naganim/buffer` compile cleanly under both Nim 2.x and Nimony.

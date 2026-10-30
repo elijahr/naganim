@@ -17,7 +17,7 @@ for candidatePath in [
     switch("path", candidatePath)
 
 when defined(macosx):
-  when defined(phyneExtensionModule):
+  when defined(naganimExtensionModule):
     switch("passL", "-Wl,-undefined,dynamic_lookup")
   else:
     let (ldFlags, exitCode) = gorgeEx("python3-config --ldflags --embed")
@@ -28,7 +28,7 @@ when defined(macosx):
     else:
       switch("passL", "-Wl,-undefined,dynamic_lookup")
 elif defined(linux):
-  when not defined(phyneExtensionModule):
+  when not defined(naganimExtensionModule):
     let (ldFlags, exitCode) = gorgeEx("python3-config --ldflags --embed")
     if exitCode == 0:
       for flag in ldFlags.strip().splitWhitespace():

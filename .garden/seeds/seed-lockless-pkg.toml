@@ -1,5 +1,5 @@
 id = "seed-lockless-pkg"
-title = "Phase 4: lockless Standalone Python Concurrency & Zero-Copy DSP Package wrapping elijahr/lockfree via phyne & headerkit"
+title = "Phase 4: lockless Standalone Python Concurrency & Zero-Copy DSP Package wrapping elijahr/lockfree via naganim & headerkit"
 season = "v0.1.0"
 sunlight = "high"
 tags = ["lockless", "python", "freethreaded", "dsp"]

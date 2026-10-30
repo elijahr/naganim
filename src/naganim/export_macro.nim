@@ -2,9 +2,9 @@
 ##
 ## Implements `design.md` §3.4:
 ## - `{.exportpy.}` / `{.pyexport.}` macro generating:
-##   1. CPython `abi3` / `abi3t` `PyCFunction` wrapper (`phyne_py_<name>`) guarded by `pyAbiBoundary`
-##   2. CFFI C-ABI wrapper (`phyne_c_<name>`) guarded by `cAbiBoundary` returning `cint` status code
-## - Compile-time IR metadata registry (`PhyneProcIr`, `phyneModuleIrJson`) for `writer_plugin.py`
+##   1. CPython `abi3` / `abi3t` `PyCFunction` wrapper (`naganim_py_<name>`) guarded by `pyAbiBoundary`
+##   2. CFFI C-ABI wrapper (`naganim_c_<name>`) guarded by `cAbiBoundary` returning `cint` status code
+## - Compile-time IR metadata registry (`NaganimProcIr`, `naganimModuleIrJson`) for `writer_plugin.py`
 ## - PEP 489 multi-phase `PyModuleDef_Init` with `Py_mod_gil = Py_MOD_GIL_NOT_USED` (`abi3t` ready)
 
 import std/[macros, strutils]
@@ -15,39 +15,39 @@ import ./conversions
 import ./buffer
 
 type
-  PhyneParamIr* = object
+  NaganimParamIr* = object
     name*: string
     nimType*: string
     cType*: string
     pyType*: string
 
-  PhyneProcIr* = object
+  NaganimProcIr* = object
     name*: string
     cSymbol*: string
     pySymbol*: string
     doc*: string
-    params*: seq[PhyneParamIr]
+    params*: seq[NaganimParamIr]
     returnNimType*: string
     returnCType*: string
     returnPyType*: string
     hasCAbi*: bool
 
-  PhyneMethodEntry* = object
+  NaganimMethodEntry* = object
     name*: string
     doc*: string
     fn*: PyCFunction
 
-var gRegisteredMethods*: seq[PhyneMethodEntry] = @[]
-var gRegisteredIr*: seq[PhyneProcIr] = @[]
+var gRegisteredMethods*: seq[NaganimMethodEntry] = @[]
+var gRegisteredIr*: seq[NaganimProcIr] = @[]
 var gCAbiStringReturnBuf* {.threadvar.}: string
 var gModuleIrCache* {.threadvar.}: string
 
-proc registerPhyneExport*(
+proc registerNaganimExport*(
   name: string,
   cSymbol: string,
   pySymbol: string,
   doc: string,
-  params: openArray[PhyneParamIr],
+  params: openArray[NaganimParamIr],
   returnNimType: string,
   returnCType: string,
   returnPyType: string,
@@ -55,8 +55,8 @@ proc registerPhyneExport*(
   fn: PyCFunction
 ) {.gcsafe, raises: [].} =
   {.cast(gcsafe).}:
-    gRegisteredMethods.add(PhyneMethodEntry(name: name, doc: doc, fn: fn))
-    gRegisteredIr.add(PhyneProcIr(
+    gRegisteredMethods.add(NaganimMethodEntry(name: name, doc: doc, fn: fn))
+    gRegisteredIr.add(NaganimProcIr(
       name: name,
       cSymbol: cSymbol,
       pySymbol: pySymbol,
@@ -80,7 +80,7 @@ proc jsonEscape(s: string): string {.gcsafe, raises: [].} =
     else: result.add(ch)
   result.add("\"")
 
-proc buildPhyneIrJson*(moduleName: string): string {.gcsafe, raises: [].} =
+proc buildNaganimIrJson*(moduleName: string): string {.gcsafe, raises: [].} =
   result = "{\n  \"module\": " & jsonEscape(moduleName) & ",\n  \"functions\": [\n"
   {.cast(gcsafe).}:
     for i, fn in gRegisteredIr:
@@ -191,7 +191,7 @@ proc mapTypeToCSig(nimType: string): (bool, string) {.compileTime.} =
     (true, "void")
   else:
     if t.startsWith("PinnedBuffer["):
-      (true, "phyne_buf_view_t")
+      (true, "naganim_buf_view_t")
     else:
       (false, "")
 
@@ -203,9 +203,9 @@ proc extractDocstring(body: NimNode): string {.compileTime.} =
 macro exportpy*(procDef: untyped): untyped =
   ## Dual-target export macro:
   ## 1. Emits original Nim proc
-  ## 2. Emits `phyne_py_<name>` (`PyCFunction` for `abi3` / `abi3t`)
-  ## 3. Emits `phyne_c_<name>` (`cdecl` C-ABI for `cffi` when types map to C primitives/strings/PinnedBuffer)
-  ## 4. Registers metadata for `.phyne.ir.json` and PEP 489 module table
+  ## 2. Emits `naganim_py_<name>` (`PyCFunction` for `abi3` / `abi3t`)
+  ## 3. Emits `naganim_c_<name>` (`cdecl` C-ABI for `cffi` when types map to C primitives/strings/PinnedBuffer)
+  ## 4. Registers metadata for `.naganim.ir.json` and PEP 489 module table
   expectKind(procDef, {nnkProcDef, nnkFuncDef})
   let rawNameNode = procDef.name
   let baseName =
@@ -214,11 +214,11 @@ macro exportpy*(procDef: untyped): untyped =
     else:
       rawNameNode.strVal
 
-  let pySymStr = "phyne_py_" & baseName
-  let cSymStr = "phyne_c_" & baseName
+  let pySymStr = "naganim_py_" & baseName
+  let cSymStr = "naganim_c_" & baseName
   let pyWrapperIdent = ident(pySymStr)
   let cWrapperIdent = ident(cSymStr)
-  let registerProcIdent = ident("phyne_register_" & baseName)
+  let registerProcIdent = ident("naganim_register_" & baseName)
   let procCallIdent = ident(baseName)
 
   let formalParams = procDef.params
@@ -266,7 +266,7 @@ macro exportpy*(procDef: untyped): untyped =
     pyUnpackStmts.add quote do:
       let rawItem = PyTuple_GetItem(`argsIdent`, Py_ssize_t(`idxLit`))
       if rawItem.isNil:
-        raise newException(PhyneConversionError, "Failed to extract argument " & $`idxLit`)
+        raise newException(NaganimConversionError, "Failed to extract argument " & $`idxLit`)
       let `argVar` = fromPyRaw(rawItem, `pType`)
     callArgs.add(argVar)
 
@@ -291,7 +291,7 @@ macro exportpy*(procDef: untyped): untyped =
           let actualArity = if `argsIdent`.isNil: 0 else: int(PyTuple_Size(`argsIdent`))
           if actualArity != `arityLit`:
             raise newException(
-              PhyneConversionError,
+              NaganimConversionError,
               `fnNameLit` & "() takes exactly " & $`arityLit` & " argument(s) (" & $actualArity & " given)"
             )
           `pyUnpackStmts`
@@ -317,7 +317,7 @@ macro exportpy*(procDef: untyped): untyped =
       if retNimStr == "string":
         cParams.add(newIdentDefs(outPtrIdent, nnkPtrTy.newTree(ident("cstring"))))
       elif retNimStr.startsWith("PinnedBuffer["):
-        cParams.add(newIdentDefs(outPtrIdent, nnkPtrTy.newTree(ident("phyne_buf_view_t"))))
+        cParams.add(newIdentDefs(outPtrIdent, nnkPtrTy.newTree(ident("naganim_buf_view_t"))))
       else:
         cParams.add(newIdentDefs(outPtrIdent, nnkPtrTy.newTree(retTypeNode)))
 
@@ -370,7 +370,7 @@ macro exportpy*(procDef: untyped): untyped =
     let pC = paramCStrs[idx]
     let pPy = paramPyStrs[idx]
     irParamBracket.add quote do:
-      PhyneParamIr(name: `pNameStr`, nimType: `pNim`, cType: `pC`, pyType: `pPy`)
+      NaganimParamIr(name: `pNameStr`, nimType: `pNim`, cType: `pC`, pyType: `pPy`)
 
   let docLit = newLit(docStr)
   let retNimLit = newLit(retNimStr)
@@ -382,7 +382,7 @@ macro exportpy*(procDef: untyped): untyped =
 
   let regStmt = quote do:
     proc `registerProcIdent`() {.gcsafe, raises: [].} =
-      registerPhyneExport(
+      registerNaganimExport(
         name = `fnNameLit`,
         cSymbol = `cSymLit`,
         pySymbol = `pySymLit`,
@@ -402,9 +402,9 @@ template pyexport*(procDef: untyped): untyped =
   exportpy(procDef)
 
 # ---------------------------------------------------------------------------
-# PEP 489 Multi-Phase Module Initialization Macro (`phyneInitModule`)
+# PEP 489 Multi-Phase Module Initialization Macro (`naganimInitModule`)
 # ---------------------------------------------------------------------------
-template phyneInitModule*(moduleName: static[string], moduleDoc: static[string] = "") =
+template naganimInitModule*(moduleName: static[string], moduleDoc: static[string] = "") =
   var gModuleMethods {.global.}: seq[PyMethodDef]
   var gModuleSlots {.global.}: array[3, PyModuleDef_Slot]
   var gModuleDef {.global.}: PyModuleDef
@@ -412,18 +412,18 @@ template phyneInitModule*(moduleName: static[string], moduleDoc: static[string] 
   var gModuleInitialized {.global.}: bool = false
   var gModuleIsFT {.global.}: bool = false
 
-  proc phyneModuleExec(m: PyObjectPtr): cint {.cdecl, gcsafe, raises: [].} =
-    discard phyne_init_runtime()
-    discard PyModule_AddStringConstant(m, "__phyne_ir__", cstring(buildPhyneIrJson(moduleName)))
+  proc naganimModuleExec(m: PyObjectPtr): cint {.cdecl, gcsafe, raises: [].} =
+    discard naganim_init_runtime()
+    discard PyModule_AddStringConstant(m, "__naganim_ir__", cstring(buildNaganimIrJson(moduleName)))
     return 0
 
-  proc phyne_module_ir_json*(): cstring {.exportc: "phyne_module_ir_json", cdecl, dynlib, gcsafe, raises: [].} =
-    discard phyne_init_runtime()
-    gModuleIrCache = buildPhyneIrJson(moduleName)
+  proc naganim_module_ir_json*(): cstring {.exportc: "naganim_module_ir_json", cdecl, dynlib, gcsafe, raises: [].} =
+    discard naganim_init_runtime()
+    gModuleIrCache = buildNaganimIrJson(moduleName)
     return cstring(gModuleIrCache)
 
   proc PyInit_module*(): PyObjectPtr {.exportc: "PyInit_" & moduleName, cdecl, dynlib, gcsafe, raises: [].} =
-    discard phyne_init_runtime()
+    discard naganim_init_runtime()
     {.cast(gcsafe).}:
       if not gModuleInitialized:
         gModuleMethods.setLen(gRegisteredMethods.len + 1)
@@ -442,7 +442,7 @@ template phyneInitModule*(moduleName: static[string], moduleDoc: static[string] 
         )
         gModuleSlots[0] = PyModuleDef_Slot(
           slot: Py_mod_exec,
-          value: cast[pointer](phyneModuleExec)
+          value: cast[pointer](naganimModuleExec)
         )
         # PEP 703 free-threading support: declare module safe without GIL
         gModuleSlots[1] = PyModuleDef_Slot(

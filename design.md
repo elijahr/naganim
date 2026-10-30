@@ -19,7 +19,7 @@ flowchart LR
     end
 
     subgraph BridgeLayer["Layer 2: Bidirectional Bridge"]
-        PH["phyne\n(abi3/abi3t + CFFI + Deferred Py_DecRef + Py_buffer + phyne/asyncio + {.pyexport.})"]
+        PH["naganim\n(abi3/abi3t + CFFI + Deferred Py_DecRef + Py_buffer + naganim/asyncio + {.pyexport.})"]
     end
 
     subgraph ConsumerLayer["Layer 3: High-Performance Python & Tooling"]
@@ -39,8 +39,8 @@ flowchart LR
 ### Core Architectural Invariants
 1. **Zero-Exception C-ABI Firewall**: No Nim `Exception` or `Defect` may ever unwind across a C or Python FFI boundary. Every exported symbol is wrapped in an explicit boundary template that either sets a Python exception (`PyErr_SetString`) and returns `NULL`/`-1` (in `abi3` mode) or returns a typed status code (`lf_status_t` in CFFI/C-ABI mode).
 2. **Thread-State-Agnostic `PyObj` Destruction**: Destroying a `PyObj` on any non-Python OS thread (such as a `lockfree` `TaskPool` worker or `lf_item_destructor_fn` callback) is wait-free and never calls `Py_DECREF` without an attached `PyThreadState`.
-3. **Zero-Syscall Steady-State Async Wakeups**: Producer threads pushing into `phyne/asyncio` or `lockless.Channel` perform an OS wakeup (`eventfd` / `kqueue` / loopback pipe) **if and only if** the queue transitions from `0 -> 1` (`was_empty == true`) **and** the consumer event loop is marked `sleeping == true` under a `moSequentiallyConsistent` Dekker fence.
-4. **Two-Point Diff & Zero Shelfware**: Every module across `lockfree`, `headerkit`, `phyne`, and `lockless` has both a provider implementation and a live consumer call-site verified by end-to-end tests.
+3. **Zero-Syscall Steady-State Async Wakeups**: Producer threads pushing into `naganim/asyncio` or `lockless.Channel` perform an OS wakeup (`eventfd` / `kqueue` / loopback pipe) **if and only if** the queue transitions from `0 -> 1` (`was_empty == true`) **and** the consumer event loop is marked `sleeping == true` under a `moSequentiallyConsistent` Dekker fence.
+4. **Two-Point Diff & Zero Shelfware**: Every module across `lockfree`, `headerkit`, `naganim`, and `lockless` has both a provider implementation and a live consumer call-site verified by end-to-end tests.
 
 ---
 
@@ -135,7 +135,7 @@ lf_status_t lf_stream_consume_read(
 - Both `lf_stream_*` and `lf_streambuffer_*` / `lfq_stream_*` aliases are exported for full C ABI symmetry with `/Users/eek/Development/lockfree/include/lockfree_streambuffer.h:113-138`.
 
 ### 2.2 0-to-1 Empty-to-Non-Empty Transition Flag (`out_was_empty`)
-To eliminate redundant kernel wakeups in event-loop bridges (`phyne/asyncio` and `lockless.Channel`), we add `tryPushEx` to `src/lockfree/bqueue128.nim` (`lines 114-150`) and expose `lf_bqueue128_push_ex` and `lf_push_ex` in `include/lockfree_bqueue128.h`, `include/lockfree.h`, and `src/lockfree/cabi.nim`:
+To eliminate redundant kernel wakeups in event-loop bridges (`naganim/asyncio` and `lockless.Channel`), we add `tryPushEx` to `src/lockfree/bqueue128.nim` (`lines 114-150`) and expose `lf_bqueue128_push_ex` and `lf_push_ex` in `include/lockfree_bqueue128.h`, `include/lockfree.h`, and `src/lockfree/cabi.nim`:
 
 ```c
 /* include/lockfree.h (Section 1: Queue) */
@@ -236,7 +236,7 @@ A new `PipelineFilter` subclass `NimCleanupTransform(PipelineFilter)` exported f
      - `NCSTRING` $\to$ `Pointer(CType("char"))`
 
 ### 3.5 `NimJsonDocEnricher` (`headerkit/transforms/nim_jsondoc.py`)
-A `PipelineFilter` subclass `NimJsonDocEnricher(PipelineFilter)` that enriches a `SourceUnit` parsed from a Nim-generated C header with docstrings, original parameter names, and high-level type metadata extracted from `nim jsondoc` (or `.phyne.ir.json`):
+A `PipelineFilter` subclass `NimJsonDocEnricher(PipelineFilter)` that enriches a `SourceUnit` parsed from a Nim-generated C header with docstrings, original parameter names, and high-level type metadata extracted from `nim jsondoc` (or `.naganim.ir.json`):
 - Adds `doc: str | None = None` to `@dataclass(slots=True)` declarations (`Function`, `Struct`, `Enum`, `Typedef`) in `headerkit/ir.py` (remediating `[CRIT-02]`).
 - Accepts `jsondoc_path: Path | str | None = None` or `nim_source_path: Path | str | None = None` (or pre-parsed `entries: list[dict]`).
 - Matches JSON doc entries (`{"name": ..., "type": "skProc" | "skType" | ..., "description": ..., "code": ...}`) against `Function.name`, `Struct.name`, `Enum.name`, and `Typedef.name`.
@@ -260,20 +260,20 @@ A new `PyiWriter` registered as `"pyi"` (`-w pyi`) in `headerkit/writers/pyi.py`
 
 ---
 
-## 4. Component 1 Specification: `phyne` (Bidirectional Nim $\leftrightarrow$ Python Bridge)
+## 4. Component 1 Specification: `naganim` (Bidirectional Nim $\leftrightarrow$ Python Bridge)
 
-**Repository**: `/Users/eek/Development/phyne` (Standalone Git Repository, Dual-Packaged as `phyne.nimble` + `pyproject.toml`)
+**Repository**: `/Users/eek/Development/naganim` (Standalone Git Repository, Dual-Packaged as `naganim.nimble` + `pyproject.toml`)
 
 ### 4.1 Directory & Module Structure
 ```text
-/Users/eek/Development/phyne/
-├── phyne.nimble
+/Users/eek/Development/naganim/
+├── naganim.nimble
 ├── pyproject.toml
 ├── README.md
 ├── CHANGELOG.md
 ├── src/
-│   ├── phyne.nim                  # Umbrella Nim export
-│   └── phyne/
+│   ├── naganim.nim                  # Umbrella Nim export
+│   └── naganim/
 │       ├── abi3.nim               # Python 3.11+ Stable ABI (0x030B0000) + PEP 703/803 abi3t declarations
 │       ├── nimony_compat.nim      # Nim 2.x & Nimony 3.0 conditional compilation & pragma compatibility
 │       ├── pyobj.nim              # PyObj ARC/ORC wrapper + borrowed/owned ref semantics
@@ -281,13 +281,13 @@ A new `PyiWriter` registered as `"pyi"` (`-w pyi`) in `headerkit/writers/pyi.py`
 │       ├── marshal.nim            # Zero-copy & value marshaling (primitives, string, seq, Table, Option, tuples)
 │       ├── buffer.nim             # Two-Tier PEP 3118 Py_buffer provider & consumer (PinnedBuffer + seq/StreamRing)
 │       ├── asyncio.nim            # Lock-free MPSC completion ring + 0->1 edge-triggered wakeup coalescer
-│       ├── macros.nim             # {.pyexport.} & {.pyimport.} compile-time typed macros + .phyne.ir.json emitter
+│       ├── macros.nim             # {.pyexport.} & {.pyimport.} compile-time typed macros + .naganim.ir.json emitter
 │       └── cffi_abi.nim           # Dual-mode C-ABI export shim for CFFI/PyPy fallback
 ├── python/
-│   └── phyne/
+│   └── naganim/
 │       ├── __init__.py            # Python runtime loader (abi3/abi3t extension + CFFI fallback), build helpers
-│       ├── _cli.py                # `phyne build` / `phyne stubgen` CLI integrating headerkit
-│       ├── _cffi_loader.py        # CFFI API/ABI dynamic loader consuming .phyne.ir.json / headerkit
+│       ├── _cli.py                # `naganim build` / `naganim stubgen` CLI integrating headerkit
+│       ├── _cffi_loader.py        # CFFI API/ABI dynamic loader consuming .naganim.ir.json / headerkit
 │       └── py.typed               # PEP 561 marker
 └── tests/
     ├── nim/
@@ -296,14 +296,14 @@ A new `PyiWriter` registered as `"pyi"` (`-w pyi`) in `headerkit/writers/pyi.py`
     │   ├── test_buffer.nim
     │   └── test_asyncio.nim
     └── python/
-        ├── test_phyne_extension.py
+        ├── test_naganim_extension.py
         ├── test_buffer_zero_copy.py
         ├── test_asyncio_bridge.py
         └── test_freethreaded_gc.py
 ```
 
-### 4.2 Unified C-ABI Core + Dual Target Support (`phyne/abi3.nim` & `phyne/cffi_abi.nim`)
-`phyne` compiles every `{.pyexport.}` function into two layers from a single Nim source definition:
+### 4.2 Unified C-ABI Core + Dual Target Support (`naganim/abi3.nim` & `naganim/cffi_abi.nim`)
+`naganim` compiles every `{.pyexport.}` function into two layers from a single Nim source definition:
 1. **Canonical C-ABI Core Function (`cdecl`, `gcsafe`, `raises: []`)**:
    - Accepts and returns C ABI types or `PyObjectPtr` handles with an explicit `cAbiBoundary` firewall.
 2. **Target A — CPython Stable ABI (`abi3` / `abi3t`) Wrapper**:
@@ -312,11 +312,11 @@ A new `PyiWriter` registered as `"pyi"` (`-w pyi`) in `headerkit/writers/pyi.py`
      - `Py_mod_exec` (`1`): Executes module initialization and attaches exported functions, constants, and `PyType_FromSpec` heap types.
      - `Py_mod_multiple_interpreters` (`3`): Set to `Py_MOD_PER_INTERPRETER_GIL_SUPPORTED` (`2`).
      - `Py_mod_gil` (`4`): Set to `Py_MOD_GIL_NOT_USED` (`(void*)1`) when compiled for CPython 3.13+ (`Py_3_13t` / `3.14t` / `3.15t`), preventing CPython from re-enabling the GIL upon `import`!
-3. **Target B — CFFI API/ABI Mode (`phyne/cffi_abi.nim` + `python/phyne/_cffi_loader.py`)**:
-   - Exports the C-ABI core symbols in a shared library (`lib<mod>.so` / `.dylib` / `.dll`) alongside the generated C header and `.phyne.ir.json`.
-   - `phyne._cffi_loader` uses `headerkit` (`CffiWriter` + `NimCleanupTransform`) to bind the shared library via CFFI for PyPy or pure-C-ABI consumers.
+3. **Target B — CFFI API/ABI Mode (`naganim/cffi_abi.nim` + `python/naganim/_cffi_loader.py`)**:
+   - Exports the C-ABI core symbols in a shared library (`lib<mod>.so` / `.dylib` / `.dll`) alongside the generated C header and `.naganim.ir.json`.
+   - `naganim._cffi_loader` uses `headerkit` (`CffiWriter` + `NimCleanupTransform`) to bind the shared library via CFFI for PyPy or pure-C-ABI consumers.
 
-### 4.3 `PyObj` & Wait-Free Deferred `Py_DecRef` Queue (`phyne/pyobj.nim` & `phyne/gc_bridge.nim`)
+### 4.3 `PyObj` & Wait-Free Deferred `Py_DecRef` Queue (`naganim/pyobj.nim` & `naganim/gc_bridge.nim`)
 ```nim
 type
   PyObjectPtr* = distinct pointer
@@ -332,9 +332,9 @@ type
        - If `1`: call `drainDeferredDecRefs()` (draining up to `64` queued `PyObjectPtr`s via `Py_DecRef`) and then `Py_DecRef(self.raw)`.
        - If `0` (called from a pure Nim `TaskPool` worker thread, OS background thread, or `lockfree` destructor callback without an attached `PyThreadState`):
          - Push `cast[pointer](self.raw)` into the global wait-free `gDeferredDecRefQueue` (`lf_bqueue128_t*` of capacity `65536`, backed by `elijahr/lockfree`'s `BQueue128`, with an overflow TreiberStack `lf_stack_t*` fallback so it can never drop a reference even if >65,536 objects are destroyed between Python boundary crossings).
-    3. Every `phyne` Python entry/exit wrapper and `phyne/asyncio` wakeup callback invokes `drainDeferredDecRefs()` on the active Python thread, guaranteeing bounded, leak-free reclamation without ever calling `PyGILState_Ensure()` inside a Nim destructor (which would deadlock against locks held by Python threads).
+    3. Every `naganim` Python entry/exit wrapper and `naganim/asyncio` wakeup callback invokes `drainDeferredDecRefs()` on the active Python thread, guaranteeing bounded, leak-free reclamation without ever calling `PyGILState_Ensure()` inside a Nim destructor (which would deadlock against locks held by Python threads).
 
-### 4.4 Two-Tier Zero-Copy Buffer Protocol (`phyne/buffer.nim`)
+### 4.4 Two-Tier Zero-Copy Buffer Protocol (`naganim/buffer.nim`)
 Implements PEP 3118 (`Py_buffer`) under the Stable ABI (`Py_LIMITED_API >= 0x030B0000`, where `Py_buffer` and `PyBuffer_FillInfo` are part of the Limited API):
 
 1. **Tier 1: `PinnedBuffer[T]` & `StreamRing` Views (True Cross-Thread Zero-Copy)**:
@@ -346,7 +346,7 @@ Implements PEP 3118 (`Py_buffer`) under the Stable ABI (`Py_LIMITED_API >= 0x030
    - Exposes a Nim `seq[T]` or `string` to Python as a zero-copy `memoryview` with a pin counter `activeExports: Atomic[int]`.
    - Any attempt to mutate length or unpin while `activeExports.load(moAcquire) > 0` raises `BufferExportedDefect` (translated at the FFI boundary to `BufferError`), preventing Use-After-Free on `seq` reallocation.
 
-### 4.5 `phyne/asyncio` — Zero-Syscall Edge-Triggered Async Bridge (`phyne/asyncio.nim`)
+### 4.5 `naganim/asyncio` — Zero-Syscall Edge-Triggered Async Bridge (`naganim/asyncio.nim`)
 Bridges Nim background threads (`lockfree` `TaskPool`, Chronos, or native threads) with Python's `asyncio.AbstractEventLoop`:
 
 ```mermaid
@@ -387,20 +387,20 @@ sequenceDiagram
     3. Sets `consumerSleeping.store(true, moSequentiallyConsistent)`.
     4. Executes Dekker double-check: if `not lf_bqueue128_is_empty(ring)` and `consumerSleeping.exchange(false, moSequentiallyConsistent)`, loops again immediately (or schedules `loop.call_soon(_on_wakeup)` if a producer is transiently preempted between `tail` CAS and cell DWCAS, remediating `[HIGH-02]`) to prevent lost wakeups!
 
-### 4.6 `{.pyexport.}` Compile-Time Typed Macro & `.phyne.ir.json` (`phyne/macros.nim`)
+### 4.6 `{.pyexport.}` Compile-Time Typed Macro & `.naganim.ir.json` (`naganim/macros.nim`)
 - `{.pyexport.}` inspects the typed Nim procedure AST (`nnkProcDef`), extracting:
   - Procedure name, Nim parameter names & types, return type, default values, and doc comments (`nnkCommentStmt`).
   - Emits:
-    1. The `abi3` `METH_FASTCALL` wrapper `phyne_wrap_<name>` with automatic `marshal.fromPy` / `marshal.toPy` conversion and `cAbiBoundary` exception translation.
-    2. The C-ABI `exportc` wrapper `phyne_cabi_<name>` for CFFI/headerkit consumption.
-    3. Appends the procedure descriptor to a compile-time metadata table written out as `<module>.phyne.ir.json` alongside the binary, consumed by `headerkit` (`NimJsonDocEnricher` + `PyiWriter`) to generate 100% accurate `.pyi` stubs and CFFI bindings.
+    1. The `abi3` `METH_FASTCALL` wrapper `naganim_wrap_<name>` with automatic `marshal.fromPy` / `marshal.toPy` conversion and `cAbiBoundary` exception translation.
+    2. The C-ABI `exportc` wrapper `naganim_cabi_<name>` for CFFI/headerkit consumption.
+    3. Appends the procedure descriptor to a compile-time metadata table written out as `<module>.naganim.ir.json` alongside the binary, consumed by `headerkit` (`NimJsonDocEnricher` + `PyiWriter`) to generate 100% accurate `.pyi` stubs and CFFI bindings.
 
 ---
 
 ## 5. Component 2 Specification: `lockless` (Standalone Python Package)
 
 **Repository**: `/Users/eek/Development/lockless` (`pip install lockless` / `import lockless`)
-**Dependencies**: Built on `elijahr/lockfree` + `phyne` + `headerkit`.
+**Dependencies**: Built on `elijahr/lockfree` + `naganim` + `headerkit`.
 
 ### 5.1 Package Architecture & Public API
 ```text
@@ -410,7 +410,7 @@ sequenceDiagram
 ├── README.md
 ├── CHANGELOG.md
 ├── nim/
-│   └── lockless_ext.nim           # Native abi3/abi3t + C-ABI extension powered by phyne & lockfree
+│   └── lockless_ext.nim           # Native abi3/abi3t + C-ABI extension powered by naganim & lockfree
 ├── src/
 │   └── lockless/
 │       ├── __init__.py            # Public exports
@@ -425,7 +425,7 @@ sequenceDiagram
 ```
 
 ### 5.2 Python Class Specifications & Lifetimes
-All `lockless` containers storing Python objects increment `Py_INCREF` when an object enters the container (`push`, `put`, `publish`) and transfer ownership (`steal` reference) on `pop`/`take`, or `Py_INCREF` on non-destructive reads (`get`, `peek`, `poll`), with a registered `lf_item_destructor_fn` / `lf_entry_destructor_fn` that routes unpopped `PyObject*` pointers through `phyne`'s wait-free deferred `Py_DecRef` queue upon container destruction or overwrite!
+All `lockless` containers storing Python objects increment `Py_INCREF` when an object enters the container (`push`, `put`, `publish`) and transfer ownership (`steal` reference) on `pop`/`take`, or `Py_INCREF` on non-destructive reads (`get`, `peek`, `poll`), with a registered `lf_item_destructor_fn` / `lf_entry_destructor_fn` that routes unpopped `PyObject*` pointers through `naganim`'s wait-free deferred `Py_DecRef` queue upon container destruction or overwrite!
 
 1. **`BQueue128[T](capacity: int = 1024)`**:
    - Wraps `lf_bqueue128_t` (`include/lockfree_bqueue128.h`).
@@ -444,22 +444,22 @@ All `lockless` containers storing Python objects increment `Py_INCREF` when an o
      - `write(data: Buffer) -> int` / `readinto(buf: WritableBuffer) -> int` / `read(max_bytes: int = -1) -> bytes`.
      - Context-manager helpers `write_view(min_bytes: int)` and `read_view()` for RAII reserve/commit.
 4. **`BroadcastRing[T](capacity: int = 1024, overflow: Literal["drop_oldest", "backoff"] = "drop_oldest", max_readers: int = 64)`**:
-   - Wraps `BroadcastRing[PyRefBox]` (`src/lockfree/broadcast.nim`) where each published Python object is wrapped in an atomic reference-counted box tracked in a companion slot table so multiple subscribers can read concurrently and `omDropOldest` / `destroy` safely decrefs overwritten or remaining items via `phyne`'s deferred decref queue (remediating `[HIGH-03]`).
+   - Wraps `BroadcastRing[PyRefBox]` (`src/lockfree/broadcast.nim`) where each published Python object is wrapped in an atomic reference-counted box tracked in a companion slot table so multiple subscribers can read concurrently and `omDropOldest` / `destroy` safely decrefs overwritten or remaining items via `naganim`'s deferred decref queue (remediating `[HIGH-03]`).
    - Methods: `publish(item: T) -> None`, `subscribe(from_earliest: bool = False) -> BroadcastSubscriber[T]`, `subscriber_count: int`, `capacity: int`, `__len__() -> int`.
    - `BroadcastSubscriber[T]`: `poll() -> tuple[Literal["ok", "empty", "lagged"], T | None, int]`, `try_read(default=None) -> T | None`, `lag: int`, `close() -> None`, `__enter__` / `__exit__`.
 5. **`ConcurrentDict[K, V]()` (alias `Ctrie[K, V]`)**:
-   - Wraps `Ctrie` (`src/lockfree/ctrie.nim`) with Python key hash/equality support and `O(1)` wait-free `snapshot()`. In `lockless_ext.nim`, `put(k, v): Option[V]` and `remove(k): Option[V]` inspect the returned displaced value and route any replaced/removed `PyObject*` directly to `phyne`'s deferred `Py_DecRef` queue (remediating `[HIGH-03]`).
+   - Wraps `Ctrie` (`src/lockfree/ctrie.nim`) with Python key hash/equality support and `O(1)` wait-free `snapshot()`. In `lockless_ext.nim`, `put(k, v): Option[V]` and `remove(k): Option[V]` inspect the returned displaced value and route any replaced/removed `PyObject*` directly to `naganim`'s deferred `Py_DecRef` queue (remediating `[HIGH-03]`).
    - Methods: `__setitem__(k, v)`, `__getitem__(k) -> V`, `__delitem__(k)`, `__contains__(k) -> bool`, `get(k, default=None)`, `put(k, v) -> bool`, `pop(k, default=...) -> V`, `compute_if_absent(k, fn: Callable[[K], V]) -> V`, `snapshot() -> ConcurrentDictSnapshot[K, V]`, `keys()`, `values()`, `items()`, `__len__() -> int`.
 6. **`SkipListMap[K, V]()`**:
-   - Wraps `SkipListMap` (`src/lockfree/skiplist.nim`) maintaining keys in sorted order, routing displaced/deleted `PyObject*` entries to `phyne`'s deferred `Py_DecRef` queue on overwrite/delete (`[HIGH-03]`).
+   - Wraps `SkipListMap` (`src/lockfree/skiplist.nim`) maintaining keys in sorted order, routing displaced/deleted `PyObject*` entries to `naganim`'s deferred `Py_DecRef` queue on overwrite/delete (`[HIGH-03]`).
    - Methods: `__setitem__(k, v)`, `__getitem__(k) -> V`, `__delitem__(k)`, `__contains__(k) -> bool`, `get(k, default=None)`, `pop(k, default=...) -> V`, `items() -> list[tuple[K, V]]`, `keys() -> list[K]`, `values() -> list[V]`, `__iter__()`, `__len__() -> int`.
 7. **`Channel[T](capacity: int = 1024)`**:
-   - Combines `BQueue128` (`lf_bqueue128_push_ex`) with `phyne/asyncio`'s 0-to-1 edge-triggered wakeup coalescer.
+   - Combines `BQueue128` (`lf_bqueue128_push_ex`) with `naganim/asyncio`'s 0-to-1 edge-triggered wakeup coalescer.
    - Supports both synchronous cross-thread producer/consumer calls (`send_nowait(item)`, `recv_nowait()`) and `asyncio` coroutines (`await ch.send(item)`, `await ch.recv()`, `async for item in ch:`), closing cleanly when `ch.close()` is called.
 8. **`TaskPool(num_workers: int = 0)`**:
    - Wraps `lf_taskpool_t` (`src/lockfree/taskpool.nim`).
    - Methods:
-     - `submit(fn: Callable, *args, **kwargs) -> asyncio.Future`: Submits work to the work-stealing pool and resolves the returned `asyncio.Future` via `phyne/asyncio` completion ring.
+     - `submit(fn: Callable, *args, **kwargs) -> asyncio.Future`: Submits work to the work-stealing pool and resolves the returned `asyncio.Future` via `naganim/asyncio` completion ring.
      - `map(fn: Callable[[T], R], items: Sequence[T], chunk_size: int = 1) -> list[R]`: Parallel map across worker threads (releasing the GIL on GIL builds and running in parallel on Free-Threaded 3.13t+ builds).
      - `parallel_for(start: int, stop: int, fn: Callable[[int], None], chunk_size: int = 1) -> None`: Direct binding to `lf_taskpool_parallel_for`.
      - `sync() -> None`, `shutdown() -> None`, `num_workers: int`, `__enter__` / `__exit__`.
@@ -471,8 +471,8 @@ All `lockless` containers storing Python objects increment `Py_INCREF` when an o
 **Repository**: `/Users/eek/Development/polyform` (cloned from `axiomantic/polyform`, isolated on a Vine strand / feature branch, never committing directly to `main`).
 - **Template Upgrades**:
   - When `has_nim == true` and `has_python == true`, scaffold:
-    - `pyproject.toml` with `phyne` and `headerkit` build hooks (`[project.optional-dependencies]`, `[tool.headerkit]`).
-    - Nim extension entrypoint using `import phyne` and `{.pyexport.}`.
+    - `pyproject.toml` with `naganim` and `headerkit` build hooks (`[project.optional-dependencies]`, `[tool.headerkit]`).
+    - Nim extension entrypoint using `import naganim` and `{.pyexport.}`.
     - Automated `.pyi` stub generation step via `headerkit -b tree-sitter -w pyi`.
 - **CI Matrix Upgrades (`.github/workflows/ci.yml.jinja`)**:
   - CPython matrix: `["3.12", "3.13", "3.13t", "3.14", "3.14t", "3.15", "3.15t"]` via `actions/setup-python` / `deadsnakes` / `uv python install`.
@@ -485,10 +485,10 @@ All `lockless` containers storing Python objects increment `Py_INCREF` when an o
 | Failure Scenario | Root Cause Hazard | Architectural Defense |
 | :--- | :--- | :--- |
 | **F1: Non-Python Thread Destroys `PyObj`** | Worker thread in `TaskPool` or `lf_queue_destroy` drops last reference to a `PyObj` without holding the GIL or a `PyThreadState`. | `PyObj.=destroy` checks `PyGILState_Check()`. When `0`, it enqueues the `PyObjectPtr` into `gDeferredDecRefQueue` (`lf_bqueue128_t` + overflow `lf_stack_t`) instead of calling `Py_DecRef`. Drained automatically on the next Python thread entry/wakeup. |
-| **F2: Lost Wakeup in `phyne/asyncio` / `lockless.Channel`** | Consumer sees empty queue, prepares to sleep; producer pushes item and checks `consumerSleeping == false` before consumer sets `consumerSleeping = true`. | Strict Dekker protocol with `moSequentiallyConsistent` fences on both sides: Consumer sets `consumerSleeping.store(true, moSeqCst)` *then* re-checks `lf_bqueue128_is_empty(ring)`; Producer publishes item (`lf_bqueue128_push_ex`), executes `threadFence(moSeqCst)`, and checks `consumerSleeping.exchange(false, moSeqCst)`. Mathematically impossible for both to miss each other. |
+| **F2: Lost Wakeup in `naganim/asyncio` / `lockless.Channel`** | Consumer sees empty queue, prepares to sleep; producer pushes item and checks `consumerSleeping == false` before consumer sets `consumerSleeping = true`. | Strict Dekker protocol with `moSequentiallyConsistent` fences on both sides: Consumer sets `consumerSleeping.store(true, moSeqCst)` *then* re-checks `lf_bqueue128_is_empty(ring)`; Producer publishes item (`lf_bqueue128_push_ex`), executes `threadFence(moSeqCst)`, and checks `consumerSleeping.exchange(false, moSeqCst)`. Mathematically impossible for both to miss each other. |
 | **F3: Dangling `memoryview` on `StreamBuffer` Destroy** | User calls `mv = buf.reserve_write(64)` and destroys/GCs `buf` while `mv` is still alive. | The `memoryview`'s `Py_buffer.obj` holds a strong `Py_INCREF` reference to the owning `StreamBuffer` / `PinnedBuffer` Python object (`PyBuffer_FillInfo` contract), preventing `tp_dealloc` from firing until `mv.release()` is called. Furthermore, `StreamBuffer.close()` raises `BufferError` if `exportCount > 0`. |
 | **F4: Unbounded Queue Destroy with Full Debra Thread Table** | `unboundedQueueDestroy` fails `registerThread` when all `MaxThreads` slots are full, skipping `destructor` callbacks. | `unboundedQueueDestroy` falls back to walking `headSegment` $\to$ `next` directly and invoking `q.base.destructor` on every unconsumed LCRQ cell (`src/lockfree/cabi.nim:600-630`). |
-| **F5: Free-Threaded Python 3.13t+ Re-Enabling the GIL on Import** | Traditional `PyModule_Create` extensions without `Py_mod_gil` cause CPython 3.13t+ to print a runtime warning and re-enable the GIL globally. | `phyne/abi3.nim` uses multi-phase initialization (`PyModuleDef_Init`) and unconditionally emits `{Py_mod_gil, Py_MOD_GIL_NOT_USED}` in the `PyModuleDef_Slot` array when `Py_GIL_DISABLED` or runtime 3.13+ is active. |
+| **F5: Free-Threaded Python 3.13t+ Re-Enabling the GIL on Import** | Traditional `PyModule_Create` extensions without `Py_mod_gil` cause CPython 3.13t+ to print a runtime warning and re-enable the GIL globally. | `naganim/abi3.nim` uses multi-phase initialization (`PyModuleDef_Init`) and unconditionally emits `{Py_mod_gil, Py_MOD_GIL_NOT_USED}` in the `PyModuleDef_Slot` array when `Py_GIL_DISABLED` or runtime 3.13+ is active. |
 
 ---
 
@@ -500,8 +500,8 @@ Per `/Users/eek/Development/pyon/implementation_plan.md`:
 - **Phase 2 (Parallel with Phase 1)**:
   - Task 2.1 (`@pyon-architect`, lock `repo:lockfree:cabi-headers`): `elijahr/lockfree` C-ABI upgrades (`lf_stream_reserve_write`/`commit_write`/`peek_read`/`consume_read`, `lf_push_ex`, `lf_bqueue128_push_ex`, `unboundedQueueDestroy` fallback drain, unit tests in `tests/test_cabi.nim`).
 - **Phase 3 (Depends on Phases 1 & 2)**:
-  - Task 3.1 (`@pyon-architect`, lock `repo:phyne:core`): `phyne` core runtime (`abi3`/`abi3t`, `PyObj` + deferred `Py_DecRef` queue, Two-Tier `Py_buffer`, `phyne/asyncio`, `nimony_compat`).
-  - Task 3.2 (`@pyon-implementer`, lock `repo:phyne:macros-packaging`): `phyne` `{.pyexport.}` macro, `.phyne.ir.json`, `headerkit` integration, dual packaging, test suite.
+  - Task 3.1 (`@pyon-architect`, lock `repo:naganim:core`): `naganim` core runtime (`abi3`/`abi3t`, `PyObj` + deferred `Py_DecRef` queue, Two-Tier `Py_buffer`, `naganim/asyncio`, `nimony_compat`).
+  - Task 3.2 (`@pyon-implementer`, lock `repo:naganim:macros-packaging`): `naganim` `{.pyexport.}` macro, `.naganim.ir.json`, `headerkit` integration, dual packaging, test suite.
 - **Phase 4 (Depends on Phase 3)**:
   - Task 4.1 (`@pyon-implementer`, lock `repo:lockless:all`): `lockless` standalone Python package (`BQueue128`, `SpscQueue`, `MpmcQueue`, `StreamBuffer`, `BroadcastRing`, `ConcurrentDict`/`Ctrie`, `SkipListMap`, `Channel`, `TaskPool`).
 - **Phase 5 (Depends on Phases 3 & 4)**:

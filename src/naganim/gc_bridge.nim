@@ -100,17 +100,17 @@ proc flushDeferredDecRefs*(): int {.discardable, gcsafe, raises: [].} =
 proc flushDeferredDecRefsCAbi() {.cdecl, gcsafe, raises: [].} =
   discard flushDeferredDecRefs()
 
-# Register the deferred flush hook with lifecycle so every phyne_init_runtime /
-# phyne_shutdown_runtime / boundary entry automatically drains queued DecRefs.
+# Register the deferred flush hook with lifecycle so every naganim_init_runtime /
+# naganim_shutdown_runtime / boundary entry automatically drains queued DecRefs.
 gDeferredFlushHook = flushDeferredDecRefsCAbi
 
 proc deferredDecRefPendingCount*(): int {.inline, gcsafe, raises: [].} =
   gDeferredPendingCount.load(moAcquire)
 
-proc phyne_flush_deferred_decrefs*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_flush_deferred_decrefs*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   cint(flushDeferredDecRefs())
 
-proc phyne_deferred_decref_count*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+proc naganim_deferred_decref_count*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
   cint(deferredDecRefPendingCount())
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 import std/[options, tables, atomics]
 import lockfree/taskpool
-import ../../src/phyne
+import ../../src/naganim
 
 var gLastPinnedBuf*: PinnedBuffer[byte]
 
@@ -110,4 +110,4 @@ proc flush_pending_decrefs*(): int64 {.exportpy.} =
   ## the number of decremented `PyObject*` references.
   int64(flushDeferredDecRefs())
 
-phyneInitModule("nim_test_ext", "Live Nim test extension for phyne pytest suite")
+naganimInitModule("nim_test_ext", "Live Nim test extension for naganim pytest suite")

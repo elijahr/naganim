@@ -1,8 +1,0 @@
-id = "seed-phyne-core"
-title = "Phase 3: phyne Core Bidirectional Nim-Python Bridge (abi3/abi3t + cffi, PyObj deferred DecRef, pyexport macro, Buffer Protocol, phyne/asyncio)"
-season = "v0.1.0"
-sunlight = "blazing"
-tags = ["phyne", "abi3t", "cffi", "asyncio", "nimony"]
-status = "SOWN"
-created_at = "2026-10-28T10:05:32Z"
-updated_at = "2026-10-28T10:05:32Z"

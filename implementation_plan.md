@@ -1,4 +1,4 @@
-# Implementation Plan: `phyne` & `lockless` Ecosystem
+# Implementation Plan: `naganim` & `lockless` Ecosystem
 
 > **CRITICAL BRANCH & PR ISOLATION INVARIANT**
 > Zero direct commits or pushes to `main` or `master` are permitted in `/Users/eek/Development/headerkit`, `/Users/eek/Development/lockfree`, `axiomantic/polyform`, or any existing repository. Every task MUST execute inside an isolated Vine strand (`vine new <task_id> --branch feat/<name>`), pass Keys 1 & 2 (`vine submit`), pass independent Key 3 Adversarial Audit (`vine audit approve --auditor agy-worker-4`), and be pushed as a feature branch for a Pull Request (`gh pr create`) rather than weaving directly into `main`.
@@ -6,7 +6,7 @@
 ## 1. Swarm Roster & Role Mapping
 | Worker Name | Persona | Role | Assigned Subsystems |
 | :--- | :--- | :--- | :--- |
-| `pyon-architect` | Spring-Compass | Staff Systems Architect | Dialectical Stage 1/2 (`understanding.md`, `design.md`), Phase 2 (`lockfree` zero-copy C ABI & 0-to-1 wakeup flags), Phase 3 (`phyne` core architecture) |
+| `pyon-architect` | Spring-Compass | Staff Systems Architect | Dialectical Stage 1/2 (`understanding.md`, `design.md`), Phase 2 (`lockfree` zero-copy C ABI & 0-to-1 wakeup flags), Phase 3 (`naganim` core architecture) |
 | `pyon-auditor` | Briar-Lens | Verification & Adversarial Auditor | Dialectical Stage 1 Fact-Check Gate, Stage 3 (`audit_report.md`), and Key 3 Pre-PR Five-Pillar Code Audit (`vine audit approve`) across all strands |
 | `pyon-implementer` | Sorrel-Darter | DevEx & Implementation Lead | Phase 1 (`headerkit` Nim `--header` macros, `NimCleanupTransform`, `PyiWriter`), Phase 3/4 Python packaging & `lockless` wrappers |
 
@@ -44,7 +44,7 @@
 ### Phase 0: Grounded Dialectical Research, Design & Audit (`understanding.md`, `design.md`, `audit_report.md`)
 - [x] **Task 0.1: Grounded Research & Architecture Specification** (`pyon-architect`)
   - *Target*: `/Users/eek/Development/pyon/understanding.md` and `/Users/eek/Development/pyon/design.md`
-  - *Scope*: Inspect exact line numbers and signatures across `/Users/eek/Development/headerkit` (`ir.py`, `_cli.py`, `backends/libclang.py`, `backends/treesitter.py`, `transforms/`, `writers/`) and `/Users/eek/Development/lockfree` (`include/lockfree.h`, `include/lockfree_streambuffer.h`, `include/lockfree_bqueue128.h`, `src/lockfree/cabi.nim`) and document exact interfaces for `headerkit`, `lockfree`, `phyne`, and `lockless`.
+  - *Scope*: Inspect exact line numbers and signatures across `/Users/eek/Development/headerkit` (`ir.py`, `_cli.py`, `backends/libclang.py`, `backends/treesitter.py`, `transforms/`, `writers/`) and `/Users/eek/Development/lockfree` (`include/lockfree.h`, `include/lockfree_streambuffer.h`, `include/lockfree_bqueue128.h`, `src/lockfree/cabi.nim`) and document exact interfaces for `headerkit`, `lockfree`, `naganim`, and `lockless`.
 - [x] **Task 0.2: Fact-Check Gate & Adversarial Design Audit** (`pyon-auditor`)
   - *Dependency*: Task 0.1
   - *Target*: `/Users/eek/Development/pyon/audit_report.md`
@@ -73,11 +73,11 @@
   - *Consumer / Call-Site*: Wire into `tests/` C ABI test suite (`nimble cabi`).
   - *Verification*: `nimble test && nimble cabi` + `vine submit --author pyon-architect` + Key 3 audit by `pyon-auditor` + feature branch PR.
 
-### Phase 3: `phyne` Core Bidirectional Nim-Python Bridge (`abi3`/`abi3t` + `cffi` + `phyne/asyncio`)
-- [x] **Task 3.1: `phyne` Core Runtime, `PyObj` Deferred DecRef, Buffer Protocol & `phyne/asyncio`** (`pyon-architect` & `pyon-implementer`)
+### Phase 3: `naganim` Core Bidirectional Nim-Python Bridge (`abi3`/`abi3t` + `cffi` + `naganim/asyncio`)
+- [x] **Task 3.1: `naganim` Core Runtime, `PyObj` Deferred DecRef, Buffer Protocol & `naganim/asyncio`** (`pyon-architect` & `pyon-implementer`)
   - *Dependency*: Task 1.1, Task 2.1
-  - *Repo*: `/Users/eek/Development/phyne` (or `/Users/eek/Development/pyon` renamed/configured as `phyne`)
-  - *Provider*: `src/phyne/abi.nim`, `src/phyne/pyobj.nim`, `src/phyne/buffer.nim`, `src/phyne/export_macro.nim`, `src/phyne/asyncio.nim`, `python/phyne/asyncio.py`, `python/phyne/writer_plugin.py`
+  - *Repo*: `/Users/eek/Development/naganim` (or `/Users/eek/Development/pyon` renamed/configured as `naganim`)
+  - *Provider*: `src/naganim/abi.nim`, `src/naganim/pyobj.nim`, `src/naganim/buffer.nim`, `src/naganim/export_macro.nim`, `src/naganim/asyncio.nim`, `python/naganim/asyncio.py`, `python/naganim/writer_plugin.py`
   - *Consumer / Call-Site*: End-to-end Nim-to-Python and Python-to-Nim extension modules tested under CPython (`abi3`/`abi3t`) and CFFI.
 
 ### Phase 4: `lockless` Flagship Python Package (`pip install lockless`)
