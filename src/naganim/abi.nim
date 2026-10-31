@@ -3,6 +3,8 @@
 ## Declares stable ABI symbols using direct `{.importc, cdecl.}` bindings
 ## without `#include <Python.h>` preprocessor macro collisions (MED-01).
 
+import std/atomics
+
 type
   Py_ssize_t* = int
   Py_hash_t* = int
@@ -231,18 +233,35 @@ proc PyErr_Restore*(ptype: PyObjectPtr, pvalue: PyObjectPtr, ptraceback: PyObjec
 # ---------------------------------------------------------------------------
 proc Py_BuildValue*(format: cstring): PyObjectPtr {.importc, cdecl, varargs, gcsafe, raises: [].}
 
+var
+  gPyNoneSingleton: Atomic[pointer]
+  gFreeThreadedRuntimeState*: Atomic[int32] # 0 = unprobed, 1 = standard GIL, 2 = PEP 703 free-threaded
+
+proc getCachedPyNone*(): PyObjectPtr {.inline, gcsafe, raises: [].} =
+  var n = cast[PyObjectPtr](gPyNoneSingleton.load(moAcquire))
+  if unlikely(n.isNil):
+    let built = Py_BuildValue("")
+    if not built.isNil:
+      gPyNoneSingleton.store(cast[pointer](built), moRelease)
+      Py_DecRef(built)
+      n = built
+  return n
+
 proc pyNewNone*(): PyObjectPtr {.inline, gcsafe, raises: [].} =
   ## Returns a new reference to Py_None using only the stable function ABI.
+  let n = getCachedPyNone()
+  if not n.isNil:
+    Py_IncRef(n)
+    return n
   Py_BuildValue("")
 
 proc pyIsNone*(obj: PyObjectPtr): bool {.inline, gcsafe, raises: [].} =
   if obj.isNil:
     return false
-  let noneObj = Py_BuildValue("")
+  let noneObj = getCachedPyNone()
   if noneObj.isNil:
     return false
-  result = (obj == noneObj)
-  Py_DecRef(noneObj)
+  return obj == noneObj
 
 proc PyLong_FromLongLong*(v: clonglong): PyObjectPtr {.importc, cdecl, gcsafe, raises: [].}
 proc PyLong_AsLongLong*(obj: PyObjectPtr): clonglong {.importc, cdecl, gcsafe, raises: [].}
@@ -258,7 +277,10 @@ proc PyObject_IsTrue*(obj: PyObjectPtr): cint {.importc, cdecl, gcsafe, raises: 
 proc isFreeThreadedRuntime*(): bool {.inline, gcsafe, raises: [].} =
   ## Detects at runtime whether the active CPython interpreter uses the 32-byte
   ## Free-Threaded (PEP 703 / Py_GIL_DISABLED) PyObject header vs the 16-byte
-  ## standard GIL PyObject header.
+  ## standard GIL PyObject header, caching the result atomically.
+  let cached = gFreeThreadedRuntimeState.load(moAcquire)
+  if likely(cached != 0'i32):
+    return cached == 2'i32
   let t = PyBool_FromLong(1)
   let f = PyBool_FromLong(0)
   if t.isNil or f.isNil:
@@ -268,6 +290,34 @@ proc isFreeThreadedRuntime*(): bool {.inline, gcsafe, raises: [].} =
   result = (tWords[3] == fWords[3]) and (tWords[3] != 0'u64)
   Py_DecRef(t)
   Py_DecRef(f)
+  gFreeThreadedRuntimeState.store(if result: 2'i32 else: 1'i32, moRelease)
+
+proc pyTypeOf*(obj: PyObjectPtr): PyObjectPtr {.inline, gcsafe, raises: [].} =
+  ## Reads `Py_TYPE(obj)` (`ob_type`) across both standard 16-byte `abi3` headers
+  ## and 32-byte Free-Threaded (`3.13t`/`3.14t` PEP 703) `PyObject_FT` headers.
+  if obj.isNil:
+    return nil
+  if isFreeThreadedRuntime():
+    let ft = cast[ptr PyObject_FT](obj)
+    return cast[PyObjectPtr](ft.ob_type)
+  else:
+    return cast[PyObjectPtr](obj.ob_type)
+
+proc pyRawRefCount*(obj: PyObjectPtr): int {.inline, gcsafe, raises: [].} =
+  ## Reads the effective reference count of `obj` across both standard GIL builds
+  ## (`ob_refcnt` at offset 0) and Free-Threaded Python `3.13t`/`3.14t` PEP 703
+  ## builds (`ob_ref_local + (ob_ref_shared shr 2)` inside `PyObject_FT`).
+  if obj.isNil:
+    return 0
+  if isFreeThreadedRuntime():
+    let ft = cast[ptr PyObject_FT](obj)
+    let localRc = ft.ob_ref_local
+    let sharedRc = int(ft.ob_ref_shared shr 2)
+    if localRc == 0xFFFFFFFF'u32:
+      return int(0x3FFFFFFF) + sharedRc
+    return int(localRc) + sharedRc
+  else:
+    return int(obj[].ob_refcnt)
 
 # ---------------------------------------------------------------------------
 # Strings (Unicode) & Bytes

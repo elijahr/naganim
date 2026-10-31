@@ -7,12 +7,15 @@
 ## - Compile-time IR metadata registry (`NaganimProcIr`, `naganimModuleIrJson`) for `writer_plugin.py`
 ## - PEP 489 multi-phase `PyModuleDef_Init` with `Py_mod_gil = Py_MOD_GIL_NOT_USED` (`abi3t` ready)
 
-import std/[macros, strutils]
+import std/[atomics, macros, strutils]
 import ./abi
 import ./lifecycle
 import ./gc_bridge
 import ./conversions
 import ./buffer
+
+const
+  CAbiStringRingSize* = 16
 
 type
   NaganimParamIr* = object
@@ -39,8 +42,15 @@ type
 
 var gRegisteredMethods*: seq[NaganimMethodEntry] = @[]
 var gRegisteredIr*: seq[NaganimProcIr] = @[]
-var gCAbiStringReturnBuf* {.threadvar.}: string
+var gCAbiStringReturnRing* {.threadvar.}: array[CAbiStringRingSize, string]
+var gCAbiStringReturnIdx* {.threadvar.}: int
 var gModuleIrCache* {.threadvar.}: string
+
+proc stashCAbiReturnString*(s: string): cstring {.inline, gcsafe, raises: [].} =
+  let idx = gCAbiStringReturnIdx and (CAbiStringRingSize - 1)
+  gCAbiStringReturnIdx = (idx + 1) and (CAbiStringRingSize - 1)
+  gCAbiStringReturnRing[idx] = s
+  return cstring(gCAbiStringReturnRing[idx])
 
 proc registerNaganimExport*(
   name: string,
@@ -129,9 +139,12 @@ proc splitTopLevelComma(s: string): seq[string] {.compileTime.} =
 proc mapTypeToPyStub*(nimType: string): string {.compileTime.} =
   let t = nimType.strip()
   case t
-  of "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
+  of "int", "int8", "int16", "int32", "int64",
+     "uint", "uint8", "uint16", "uint32", "uint64", "byte",
+     "cint", "cuint", "cshort", "cushort", "cschar", "cuchar",
+     "clong", "culong", "clonglong", "culonglong", "csize_t", "ptrdiff_t", "Py_ssize_t":
     "int"
-  of "float", "float32", "float64":
+  of "float", "float32", "float64", "cfloat", "cdouble":
     "float"
   of "bool":
     "bool"
@@ -160,28 +173,32 @@ proc mapTypeToPyStub*(nimType: string): string {.compileTime.} =
     else:
       "Any"
 
-proc mapTypeToCSig(nimType: string): (bool, string) {.compileTime.} =
+proc mapTypeToCSig*(nimType: string): (bool, string) {.compileTime.} =
   let t = nimType.strip()
   case t
-  of "int", "int64":
+  of "int", "int64", "clonglong":
     (true, "int64_t")
-  of "int32":
+  of "int32", "cint":
     (true, "int32_t")
-  of "int16":
+  of "int16", "cshort":
     (true, "int16_t")
-  of "int8":
+  of "int8", "cschar":
     (true, "int8_t")
-  of "uint", "uint64":
+  of "uint", "uint64", "culonglong":
     (true, "uint64_t")
-  of "uint32":
+  of "uint32", "cuint":
     (true, "uint32_t")
-  of "uint16":
+  of "uint16", "cushort":
     (true, "uint16_t")
-  of "uint8", "byte":
+  of "uint8", "byte", "cuchar":
     (true, "uint8_t")
-  of "float", "float64":
+  of "csize_t":
+    (true, "size_t")
+  of "ptrdiff_t", "Py_ssize_t":
+    (true, "ssize_t")
+  of "float", "float64", "cdouble":
     (true, "double")
-  of "float32":
+  of "float32", "cfloat":
     (true, "float")
   of "bool":
     (true, "bool")
@@ -328,9 +345,10 @@ macro exportpy*(procDef: untyped): untyped =
           `cNimCall`
       elif retNimStr == "string":
         quote do:
-          gCAbiStringReturnBuf = `cNimCall`
+          let strVal = `cNimCall`
+          let cs = stashCAbiReturnString(strVal)
           if not `outPtrIdent`.isNil:
-            `outPtrIdent`[] = cstring(gCAbiStringReturnBuf)
+            `outPtrIdent`[] = cs
       elif retNimStr.startsWith("PinnedBuffer["):
         quote do:
           let pinnedRes = `cNimCall`
@@ -409,7 +427,7 @@ template naganimInitModule*(moduleName: static[string], moduleDoc: static[string
   var gModuleSlots {.global.}: array[3, PyModuleDef_Slot]
   var gModuleDef {.global.}: PyModuleDef
   var gModuleDefFT {.global.}: PyModuleDef_FT
-  var gModuleInitialized {.global.}: bool = false
+  var gModuleInitState {.global.}: Atomic[int32] # 0 = Uninit, 1 = Initializing, 2 = Ready
   var gModuleIsFT {.global.}: bool = false
 
   proc naganimModuleExec(m: PyObjectPtr): cint {.cdecl, gcsafe, raises: [].} =
@@ -425,75 +443,80 @@ template naganimInitModule*(moduleName: static[string], moduleDoc: static[string
   proc PyInit_module*(): PyObjectPtr {.exportc: "PyInit_" & moduleName, cdecl, dynlib, gcsafe, raises: [].} =
     discard naganim_init_runtime()
     {.cast(gcsafe).}:
-      if not gModuleInitialized:
-        gModuleMethods.setLen(gRegisteredMethods.len + 1)
-        for i in 0 ..< gRegisteredMethods.len:
-          gModuleMethods[i] = PyMethodDef(
-            ml_name: cstring(gRegisteredMethods[i].name),
-            ml_meth: gRegisteredMethods[i].fn,
-            ml_flags: METH_VARARGS,
-            ml_doc: cstring(gRegisteredMethods[i].doc)
+      if gModuleInitState.load(moAcquire) != 2'i32:
+        var expected: int32 = 0'i32
+        if gModuleInitState.compareExchange(expected, 1'i32, moAcquireRelease, moAcquire):
+          gModuleMethods.setLen(gRegisteredMethods.len + 1)
+          for i in 0 ..< gRegisteredMethods.len:
+            gModuleMethods[i] = PyMethodDef(
+              ml_name: cstring(gRegisteredMethods[i].name),
+              ml_meth: gRegisteredMethods[i].fn,
+              ml_flags: METH_VARARGS,
+              ml_doc: cstring(gRegisteredMethods[i].doc)
+            )
+          gModuleMethods[gRegisteredMethods.len] = PyMethodDef(
+            ml_name: nil,
+            ml_meth: nil,
+            ml_flags: 0,
+            ml_doc: nil
           )
-        gModuleMethods[gRegisteredMethods.len] = PyMethodDef(
-          ml_name: nil,
-          ml_meth: nil,
-          ml_flags: 0,
-          ml_doc: nil
-        )
-        gModuleSlots[0] = PyModuleDef_Slot(
-          slot: Py_mod_exec,
-          value: cast[pointer](naganimModuleExec)
-        )
-        # PEP 703 free-threading support: declare module safe without GIL
-        gModuleSlots[1] = PyModuleDef_Slot(
-          slot: Py_mod_gil,
-          value: Py_MOD_GIL_NOT_USED
-        )
-        gModuleSlots[2] = PyModuleDef_Slot(slot: 0, value: nil)
-        gModuleIsFT = isFreeThreadedRuntime()
-        if gModuleIsFT:
-          gModuleDefFT = PyModuleDef_FT(
-            m_base: PyModuleDef_Base_FT(
-              ob_base: PyObject_FT(
-                ob_tid: 0,
-                ob_flags: 0,
-                ob_mutex: 0,
-                ob_gc_bits: 0,
-                ob_ref_local: 0xFFFFFFFF'u32,
-                ob_ref_shared: 0,
-                ob_type: nil
+          gModuleSlots[0] = PyModuleDef_Slot(
+            slot: Py_mod_exec,
+            value: cast[pointer](naganimModuleExec)
+          )
+          # PEP 703 free-threading support: declare module safe without GIL
+          gModuleSlots[1] = PyModuleDef_Slot(
+            slot: Py_mod_gil,
+            value: Py_MOD_GIL_NOT_USED
+          )
+          gModuleSlots[2] = PyModuleDef_Slot(slot: 0, value: nil)
+          gModuleIsFT = isFreeThreadedRuntime()
+          if gModuleIsFT:
+            gModuleDefFT = PyModuleDef_FT(
+              m_base: PyModuleDef_Base_FT(
+                ob_base: PyObject_FT(
+                  ob_tid: 0,
+                  ob_flags: 0,
+                  ob_mutex: 0,
+                  ob_gc_bits: 0,
+                  ob_ref_local: 0xFFFFFFFF'u32,
+                  ob_ref_shared: 0,
+                  ob_type: nil
+                ),
+                m_init: nil,
+                m_index: 0,
+                m_copy: nil
               ),
-              m_init: nil,
-              m_index: 0,
-              m_copy: nil
-            ),
-            m_name: cstring(moduleName),
-            m_doc: cstring(moduleDoc),
-            m_size: 0,
-            m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
-            m_slots: addr gModuleSlots[0],
-            m_traverse: nil,
-            m_clear: nil,
-            m_free: nil
-          )
+              m_name: cstring(moduleName),
+              m_doc: cstring(moduleDoc),
+              m_size: 0,
+              m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
+              m_slots: addr gModuleSlots[0],
+              m_traverse: nil,
+              m_clear: nil,
+              m_free: nil
+            )
+          else:
+            gModuleDef = PyModuleDef(
+              m_base: PyModuleDef_Base(
+                ob_base: PyObject(ob_refcnt: 1, ob_type: nil),
+                m_init: nil,
+                m_index: 0,
+                m_copy: nil
+              ),
+              m_name: cstring(moduleName),
+              m_doc: cstring(moduleDoc),
+              m_size: 0,
+              m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
+              m_slots: addr gModuleSlots[0],
+              m_traverse: nil,
+              m_clear: nil,
+              m_free: nil
+            )
+          gModuleInitState.store(2'i32, moRelease)
         else:
-          gModuleDef = PyModuleDef(
-            m_base: PyModuleDef_Base(
-              ob_base: PyObject(ob_refcnt: 1, ob_type: nil),
-              m_init: nil,
-              m_index: 0,
-              m_copy: nil
-            ),
-            m_name: cstring(moduleName),
-            m_doc: cstring(moduleDoc),
-            m_size: 0,
-            m_methods: if gModuleMethods.len > 0: addr gModuleMethods[0] else: nil,
-            m_slots: addr gModuleSlots[0],
-            m_traverse: nil,
-            m_clear: nil,
-            m_free: nil
-          )
-        gModuleInitialized = true
+          while gModuleInitState.load(moAcquire) != 2'i32:
+            cpuRelax()
       if gModuleIsFT:
         return PyModuleDef_Init(cast[ptr PyModuleDef](addr gModuleDefFT))
       else:

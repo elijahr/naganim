@@ -8,8 +8,10 @@ zero polling timers (`design.md` §3.3, `CRIT-03`).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import deque
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Self
 
 from ._cffi_loader import NaganimCffiModule, NaganimRuntimeError
 
@@ -69,7 +71,7 @@ class NaganimAsyncBridge:
     ) -> None:
         self._mod = cffi_mod
         self._ffi = cffi_mod.ffi
-        self._lib = cffi_mod.lib
+        self._lib: Any = cffi_mod.lib
         self.loop = loop or asyncio.get_running_loop()
         self._bridge_ptr = self._lib.naganim_async_bridge_create(int(num_workers))
         if self._bridge_ptr == self._ffi.NULL:
@@ -83,6 +85,7 @@ class NaganimAsyncBridge:
         self._next_id = 1
         self._futures: dict[int, asyncio.Future[Any]] = {}
         self._channels: dict[int, AsyncChannel] = {}
+        self._op_callbacks: dict[int, Any] = {}
         self._closed = False
 
         # Pre-allocate CFFI output buffers for zero-allocation completion popping
@@ -128,11 +131,15 @@ class NaganimAsyncBridge:
             status = int(self._out_status[0])
             int_val = int(self._out_int[0])
             str_ptr = self._out_str[0]
-            err_msg = (
-                self._ffi.string(str_ptr).decode("utf-8", errors="replace")
-                if str_ptr != self._ffi.NULL
-                else ""
-            )
+            if str_ptr != self._ffi.NULL:
+                raw_str = self._ffi.string(str_ptr)
+                err_msg = (
+                    raw_str.decode("utf-8", errors="replace")
+                    if isinstance(raw_str, bytes)
+                    else str(raw_str)
+                )
+            else:
+                err_msg = ""
 
             if status in (1, 2):  # AsyncChannel event
                 ch = self._channels.get(fut_id)
@@ -150,7 +157,53 @@ class NaganimAsyncBridge:
                 else:
                     fut.set_exception(NaganimRuntimeError(err_msg or f"Nim async task error ({status})"))
 
-    def submit_compute(self, op_code: int, arg_a: int, arg_b: int) -> asyncio.Future[int]:
+    def register_op(self, op_code: int, handler: Callable[[int, int], int] | Any) -> None:
+        """Registers a native C/Nim function pointer or Python callable under `op_code` (1..255)."""
+        c_fn: Any
+        if isinstance(handler, self._ffi.CData):
+            c_fn = handler
+        elif callable(handler):
+            py_fn = handler
+
+            def _c_trampoline(
+                arg_a: int,
+                arg_b: int,
+                out_res: Any,
+                err_buf: Any,
+                err_cap: int,
+            ) -> int:
+                try:
+                    val = int(py_fn(int(arg_a), int(arg_b)))
+                    if out_res != self._ffi.NULL:
+                        out_res[0] = val
+                    return 0
+                except (RuntimeError, ValueError, TypeError, ArithmeticError, LookupError, OSError) as exc:
+                    msg_bytes = f"{type(exc).__name__}: {exc}".encode("utf-8", errors="replace")
+                    if err_buf != self._ffi.NULL and err_cap > 0:
+                        n = min(len(msg_bytes), int(err_cap) - 1)
+                        self._ffi.memmove(err_buf, msg_bytes, n)
+                        err_buf[n] = b"\x00"
+                    return -1
+
+            c_fn = self._ffi.callback(
+                "int(int64_t, int64_t, int64_t*, char*, size_t)",
+                _c_trampoline,
+            )
+        else:
+            raise TypeError("handler must be a CFFI function pointer or callable(arg_a, arg_b) -> int")
+
+        rc = int(self._lib.naganim_async_register_op(int(op_code), c_fn))
+        self._mod._check_status(rc)
+        self._op_callbacks[int(op_code)] = c_fn
+
+    def unregister_op(self, op_code: int) -> None:
+        """Unregisters a task handler previously registered for `op_code`."""
+        rc = int(self._lib.naganim_async_unregister_op(int(op_code)))
+        self._mod._check_status(rc)
+        self._op_callbacks.pop(int(op_code), None)
+
+    def submit_compute(self, op_code: int, arg_a: int = 0, arg_b: int = 0) -> asyncio.Future[int]:
+        """Submits a task with `op_code` and `(arg_a, arg_b)` to the Nim `TaskPool`."""
         if self._closed:
             raise NaganimRuntimeError("NaganimAsyncBridge is closed")
         fut_id = self._alloc_id()
@@ -165,10 +218,6 @@ class NaganimAsyncBridge:
             self._futures.pop(fut_id, None)
             self._mod._check_status(rc)
         return fut
-
-    def sum_squares(self, start: int, end: int) -> asyncio.Future[int]:
-        """Offloads parallel sum-of-squares computation `[start..end]` to Nim `TaskPool`."""
-        return self.submit_compute(1, start, end)
 
     def create_channel(self) -> AsyncChannel:
         if self._closed:
@@ -190,10 +239,8 @@ class NaganimAsyncBridge:
         if not self._closed:
             self._closed = True
             if self._read_fd >= 0:
-                try:
+                with contextlib.suppress(RuntimeError, ValueError, OSError):
                     self.loop.remove_reader(self._read_fd)
-                except Exception:
-                    pass
                 self._read_fd = -1
             if self._bridge_ptr != self._ffi.NULL:
                 self._lib.naganim_async_bridge_destroy(self._bridge_ptr)
@@ -202,9 +249,10 @@ class NaganimAsyncBridge:
                 if not fut.done():
                     fut.cancel()
             self._futures.clear()
+            self._op_callbacks.clear()
 
-    async def __aenter__(self) -> NaganimAsyncBridge:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.close()

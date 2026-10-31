@@ -5,9 +5,10 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import weakref
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any, Self
 
 import cffi
 
@@ -16,6 +17,10 @@ from .writer_plugin import NaganimFunctionSpec, NaganimModuleIr, NaganimWriterPl
 
 class NaganimRuntimeError(RuntimeError):
     """Raised when a Nim procedure exported via naganim C-ABI fails with an exception."""
+
+
+def _decode_cffi_str(raw: bytes | str) -> str:
+    return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
 
 
 class NaganimBufferOwner:
@@ -46,17 +51,23 @@ class NaganimBufferOwner:
             self._released = True
             self._finalizer()
 
-    def __enter__(self) -> NaganimBufferOwner:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.release()
 
 
 class NaganimCffiModule:
     """Dynamically wraps a compiled `naganim` shared library via CFFI ABI mode."""
 
-    def __init__(self, lib_path: str | Path) -> None:
+    def __init__(
+        self,
+        lib_path: str | Path,
+        *,
+        c_header_path: str | Path | None = None,
+        nim_source_path: str | Path | None = None,
+    ) -> None:
         self.lib_path = Path(lib_path).resolve()
         if not self.lib_path.exists():
             raise FileNotFoundError(f"Shared library not found: {self.lib_path}")
@@ -64,7 +75,7 @@ class NaganimCffiModule:
         # Bootstrap FFI to read embedded IR JSON
         boot_ffi = cffi.FFI()
         boot_ffi.cdef(NaganimWriterPlugin.BASE_CFFI_CDEF)
-        boot_lib = boot_ffi.dlopen(str(self.lib_path))
+        boot_lib: Any = boot_ffi.dlopen(str(self.lib_path))
         rc = int(boot_lib.naganim_init_runtime())
         if rc != 0:
             raise NaganimRuntimeError(f"naganim_init_runtime() failed with status {rc}")
@@ -72,14 +83,18 @@ class NaganimCffiModule:
         ir_ptr = boot_lib.naganim_module_ir_json()
         if ir_ptr == boot_ffi.NULL:
             raise NaganimRuntimeError("naganim_module_ir_json() returned NULL")
-        ir_json = boot_ffi.string(ir_ptr).decode("utf-8")
+        ir_json = _decode_cffi_str(boot_ffi.string(ir_ptr))
         self.ir: NaganimModuleIr = NaganimModuleIr.from_json(ir_json)
-        self.plugin = NaganimWriterPlugin(self.ir)
+        self.plugin = NaganimWriterPlugin(
+            self.ir,
+            c_header_path=c_header_path,
+            nim_source_path=nim_source_path,
+        )
 
         # Full FFI instance with all exported C-ABI function signatures
         self.ffi = cffi.FFI()
         self.ffi.cdef(self.plugin.generate_cffi_cdef())
-        self.lib = self.ffi.dlopen(str(self.lib_path))
+        self.lib: Any = self.ffi.dlopen(str(self.lib_path))
         self._functions: dict[str, Callable[..., Any]] = {}
 
         for fn_spec in self.ir.functions:
@@ -92,7 +107,7 @@ class NaganimCffiModule:
         if status != 0:
             err_ptr = self.lib.naganim_last_error()
             if err_ptr != self.ffi.NULL:
-                msg = self.ffi.string(err_ptr).decode("utf-8", errors="replace")
+                msg = _decode_cffi_str(self.ffi.string(err_ptr))
             else:
                 msg = f"Nim C-ABI error (status={status})"
             self.lib.naganim_clear_error()
@@ -150,7 +165,7 @@ class NaganimCffiModule:
                 self._check_status(status)
                 if out_ptr[0] == self.ffi.NULL:
                     return ""
-                return self.ffi.string(out_ptr[0]).decode("utf-8")
+                return _decode_cffi_str(self.ffi.string(out_ptr[0]))
             elif ret_c == "naganim_buf_view_t":
                 out_view = self.ffi.new("naganim_buf_view_t*")
                 status = int(c_fn(*converted_args, out_view))
@@ -182,10 +197,44 @@ class NaganimCffiModule:
     def deferred_decref_count(self) -> int:
         return int(self.lib.naganim_deferred_decref_count())
 
+    def enter_borrow(self) -> int:
+        return int(self.lib.naganim_enter_borrow())
 
-def load_cffi_library(lib_path: str | Path) -> NaganimCffiModule:
+    def exit_borrow(self) -> int:
+        return int(self.lib.naganim_exit_borrow())
+
+    def active_borrowers(self) -> int:
+        return int(self.lib.naganim_active_borrowers())
+
+    def retire_pyobj(self, ptr_addr: int) -> bool:
+        return bool(self.lib.naganim_retire_pyobj(self.ffi.cast("void*", ptr_addr)))
+
+    def pop_deferred_decref(self) -> int:
+        out = self.ffi.new("void**")
+        if bool(self.lib.naganim_pop_deferred_decref(out)):
+            return int(self.ffi.cast("uintptr_t", out[0]))
+        return 0
+
+    def pop_deferred_decref_batch(self, max_items: int) -> list[int]:
+        if max_items <= 0:
+            return []
+        buf = self.ffi.new("void*[]", max_items)
+        popped = int(self.lib.naganim_pop_deferred_decref_batch(buf, max_items))
+        return [int(self.ffi.cast("uintptr_t", buf[i])) for i in range(popped)]
+
+
+def load_cffi_library(
+    lib_path: str | Path,
+    *,
+    c_header_path: str | Path | None = None,
+    nim_source_path: str | Path | None = None,
+) -> NaganimCffiModule:
     """Loads a compiled `naganim` shared library via CFFI ABI mode."""
-    return NaganimCffiModule(lib_path)
+    return NaganimCffiModule(
+        lib_path,
+        c_header_path=c_header_path,
+        nim_source_path=nim_source_path,
+    )
 
 
 def load_abi3_extension(module_name: str, lib_path: str | Path) -> ModuleType:

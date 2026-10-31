@@ -42,6 +42,51 @@ proc exportedWillFail*(x: int64): int64 {.exportpy.} =
     raise newException(IndexDefect, "simulated defect on 999")
   return x * 2
 
+proc exportedScaleFloat*(x: float, factor: cint): float {.exportpy.} =
+  ## Scales a float by a C int factor.
+  x * float(factor)
+
+proc exportedBitMask*(mask: uint64, shift: uint32, offset: csize_t): uint64 {.exportpy.} =
+  ## Shifts mask and adds offset.
+  (mask shl shift) + uint64(offset)
+
+proc writeErrBuf(buf: ptr char, cap: csize_t, msg: string) {.inline, gcsafe, raises: [].} =
+  if buf.isNil or cap == 0:
+    return
+  let n = min(msg.len, int(cap) - 1)
+  if n > 0:
+    copyMem(buf, unsafeAddr msg[0], n)
+  cast[ptr UncheckedArray[char]](buf)[n] = '\0'
+
+proc testComputeSumSquares(
+  argA: int64,
+  argB: int64,
+  outResult: ptr int64,
+  outErrBuf: ptr char,
+  errBufCap: csize_t
+): cint {.cdecl, gcsafe.} =
+  if argB < argA:
+    writeErrBuf(outErrBuf, errBufCap, "invalid range: argB < argA")
+    return -1
+  var acc: int64 = 0
+  for i in argA .. argB:
+    acc += i * i
+  outResult[] = acc
+  return 0
+
+proc testComputeDeliberateError(
+  argA: int64,
+  argB: int64,
+  outResult: ptr int64,
+  outErrBuf: ptr char,
+  errBufCap: csize_t
+): cint {.cdecl, gcsafe.} =
+  discard argA
+  discard argB
+  discard outResult
+  writeErrBuf(outErrBuf, errBufCap, "ValueError: deliberate worker failure")
+  return -1
+
 naganimInitModule("naganim_nim_test_mod", "Test module for naganim")
 
 var gWorkerDropDoneCount: Atomic[int]
@@ -57,9 +102,10 @@ proc nonPythonWorkerDropPyObj(arg: pointer) {.nimcall, gcsafe.} =
   discard gWorkerDropDoneCount.fetchAdd(1, moRelease)
 
 suite "1. Runtime Lifecycle & Exception Firewalls":
-  test "naganim_init_runtime is idempotent and thread-local error state round-trips":
+  test "naganim_init_runtime is idempotent, 3-state latch reaches Ready (2), and thread-local error state round-trips":
     check naganim_init_runtime() == 0
     check naganim_init_runtime() == 0
+    check naganim_init_state() == 2'i32
     naganim_clear_error()
     check naganim_last_error() == nil
 
@@ -170,6 +216,58 @@ suite "2. PyObj ORC Reference Counting & Wait-Free Deferred DecRef Queue":
     check int(targetDict[].ob_refcnt) == initialRc
     Py_DecRef(targetDict)
 
+  test "Borrow guard blocks deferred decref reclamation until all borrowers exit, and PyObject_FT refCount is supported":
+    discard flushDeferredDecRefs()
+    let targetList = PyList_New(0)
+    let initialRc = targetList.pyRawRefCount
+    check initialRc == 1
+
+    # Retire two extra references via C-ABI retire API
+    Py_IncRef(targetList)
+    Py_IncRef(targetList)
+    check targetList.pyRawRefCount == 3
+    check naganim_retire_pyobj(cast[pointer](targetList)) == 1
+    check naganim_retire_pyobj(cast[pointer](targetList)) == 1
+    check deferredDecRefPendingCount() == 2
+
+    # Enter a borrow scope: flushDeferredDecRefs and popDeferredDecRef must NOT reclaim while activeBorrowers > 0
+    check naganim_enter_borrow() == 1
+    check naganim_active_borrowers() == 1
+    check flushDeferredDecRefs() == 0
+    var poppedPtr: pointer = nil
+    check naganim_pop_deferred_decref(addr poppedPtr) == 0
+    check deferredDecRefPendingCount() == 2
+    check targetList.pyRawRefCount == 3
+
+    # Exit borrow scope: now pop 1 via batch API and flush the remaining 1
+    check naganim_exit_borrow() == 0
+    check naganim_active_borrowers() == 0
+    var batchBuf: array[4, pointer]
+    let poppedCount = naganim_pop_deferred_decref_batch(addr batchBuf[0], 1)
+    check poppedCount == 1
+    check batchBuf[0] == cast[pointer](targetList)
+    Py_DecRef(cast[PyObjectPtr](batchBuf[0]))
+    check targetList.pyRawRefCount == 2
+
+    check flushDeferredDecRefs() == 1
+    check deferredDecRefPendingCount() == 0
+    check targetList.pyRawRefCount == 1
+    Py_DecRef(targetList)
+
+    # Verify Free-Threaded PyObject_FT ob_ref_local + (ob_ref_shared shr 2) calculation
+    var fakeFt: PyObject_FT
+    fakeFt.ob_tid = 12345'u
+    fakeFt.ob_flags = 0'u16
+    fakeFt.ob_mutex = 0'u8
+    fakeFt.ob_gc_bits = 0'u8
+    fakeFt.ob_ref_local = 3'u32
+    fakeFt.ob_ref_shared = Py_ssize_t(5 shl 2)
+    fakeFt.ob_type = nil
+    let prevFtState = gFreeThreadedRuntimeState.load(moAcquire)
+    gFreeThreadedRuntimeState.store(2'i32, moRelease)
+    check pyRawRefCount(cast[PyObjectPtr](addr fakeFt)) == 8
+    gFreeThreadedRuntimeState.store(prevFtState, moRelease)
+
 suite "3. Bidirectional Type Marshaling & Negative Controls":
   test "Round-trip primitives, strings, bytes, seq, Option, Table, and tuples":
     let bTrue = toPy(true)
@@ -275,6 +373,64 @@ suite "4. Two-Tier Zero-Copy Buffer Protocol (PinnedBuffer & ScopedSeqBuffer)":
     discard callPy(releaseMethod)
     check pbuf.exportCount == 0
 
+  test "PinnedBuffer survives Nim owner scope exit while exported and respects PEP 3118 flags & heap-type refcount":
+    var cView: naganim_buf_view_t
+    block:
+      var ephemeral = newPinnedBufferFromOpenArray([100'i64, 200'i64, 300'i64])
+      cView = ephemeral.toBufView()
+      check ephemeral.exportCount == 1
+    # `ephemeral` is destroyed here, but `cView` holds a unified refCount lease!
+    let dataArr = cast[ptr UncheckedArray[int64]](cView.data)
+    check dataArr[0] == 100'i64
+    check dataArr[1] == 200'i64
+    check dataArr[2] == 300'i64
+    naganim_buf_release(addr cView)
+    check cView.data == nil
+
+    # Verify PEP 3118 flags (PyBUF_SIMPLE vs PyBUF_FORMAT/ND/STRIDES and PyBUF_WRITABLE on readonly buffer)
+    var roBuf = newPinnedBufferFromOpenArray([7'u8, 8'u8, 9'u8], readonly = true)
+    let exporterObj = roBuf.toPyBufferExporterRaw()
+    check exporterObj != nil
+
+    var viewSimple: Py_buffer
+    check PyObject_GetBuffer(exporterObj, addr viewSimple, PyBUF_SIMPLE) == 0
+    check viewSimple.readonly == 1
+    check viewSimple.format == nil
+    check viewSimple.ndim == 0
+    check viewSimple.shape == nil
+    check viewSimple.strides == nil
+    check roBuf.exportCount == 1
+    PyBuffer_Release(addr viewSimple)
+    check roBuf.exportCount == 0
+
+    var viewFull: Py_buffer
+    check PyObject_GetBuffer(exporterObj, addr viewFull, PyBUF_FORMAT or PyBUF_ND or PyBUF_STRIDES) == 0
+    check viewFull.format != nil
+    check $viewFull.format == "B"
+    check viewFull.ndim == 1
+    check viewFull.shape != nil
+    check int(viewFull.shape[]) == 3
+    check viewFull.strides != nil
+    check int(viewFull.strides[]) == 1
+    PyBuffer_Release(addr viewFull)
+    check roBuf.exportCount == 0
+
+    # Negative control: PyBUF_WRITABLE on readonly buffer must fail with BufferError
+    var viewWritable: Py_buffer
+    check PyObject_GetBuffer(exporterObj, addr viewWritable, PyBUF_WRITABLE) == -1
+    check PyErr_Occurred() != nil
+    PyErr_Clear()
+    Py_DecRef(exporterObj)
+
+    # Heap-type refcount stability across 1,000 buffer exporter allocations
+    let bufTypePtr = ensurePyBufferType()
+    let baseTypeRc = bufTypePtr.pyRawRefCount
+    for _ in 0 ..< 1000:
+      let mv = roBuf.toPyMemoryView()
+      let rel = mv.getAttr("release")
+      discard callPy(rel)
+    check bufTypePtr.pyRawRefCount == baseTypeRc
+
   test "ScopedSeqBuffer raises BufferExportedDefect on resize while exported":
     let sbuf = newScopedSeqBuffer([1'i64, 2'i64, 3'i64])
     check sbuf.len == 3
@@ -322,6 +478,26 @@ suite "5. Dual-Target {.exportpy.} Wrappers & IR Metadata":
     check naganim_c_exportedGreet("Nim", addr outStr) == 0
     check $outStr == "Hello, Nim!"
 
+    # Verify thread-local string return ring keeps multiple simultaneous C-ABI string returns alive
+    var outStr1: cstring = nil
+    var outStr2: cstring = nil
+    var outStr3: cstring = nil
+    check naganim_c_exportedGreet("Alpha", addr outStr1) == 0
+    check naganim_c_exportedGreet("Beta", addr outStr2) == 0
+    check naganim_c_exportedGreet("Gamma", addr outStr3) == 0
+    check $outStr1 == "Hello, Alpha!"
+    check $outStr2 == "Hello, Beta!"
+    check $outStr3 == "Hello, Gamma!"
+
+    # Verify extended scalar types (float, cint, uint64, uint32, csize_t)
+    var outFloat: cdouble = 0.0
+    check naganim_c_exportedScaleFloat(2.5, 6.cint, addr outFloat) == 0
+    check outFloat == 15.0
+
+    var outMask: uint64 = 0
+    check naganim_c_exportedBitMask(3'u64, 4'u32, csize_t(5), addr outMask) == 0
+    check outMask == 53'u64
+
     # Negative controls on naganim_c_exportedWillFail
     var outFail: int64 = 0
     check naganim_c_exportedWillFail(-5, addr outFail) == -1
@@ -349,11 +525,20 @@ suite "5. Dual-Target {.exportpy.} Wrappers & IR Metadata":
     check irJson.startsWith("{\n  \"module\": \"naganim_nim_test_mod\"")
 
 suite "6. Lock-Free NaganimAsyncBridge & TaskPool Offloading":
-  test "NaganimAsyncBridge offloads parallel sum of squares to TaskPool and signals wakeup pipe":
+  test "NaganimAsyncBridge registers custom compute callbacks, offloads to TaskPool, and supports multiple simultaneous bridges":
+    check naganim_async_register_op(1, testComputeSumSquares) == 0
+    check naganim_async_register_op(2, testComputeDeliberateError) == 0
+
     let bridge = naganim_async_bridge_create(4)
+    let bridge2 = naganim_async_bridge_create(2)
     check bridge != nil
+    check bridge2 != nil
+    check naganim_async_active_bridge_count() == 2
+
     let rfd = naganim_async_bridge_read_fd(bridge)
+    let rfd2 = naganim_async_bridge_read_fd(bridge2)
     check rfd >= 0
+    check rfd2 >= 0
 
     check naganim_async_submit_compute(bridge, 101'u64, 1, 1, 10) == 0
     # Wait for TaskPool completion
@@ -373,4 +558,34 @@ suite "6. Lock-Free NaganimAsyncBridge & TaskPool Offloading":
     check status == 0
     check intVal == 385'i64 # 1^2 + 2^2 + ... + 10^2 = 385
 
+    # Negative control: unregistered opcode returns -1 with descriptive message
+    check naganim_async_submit_compute(bridge, 102'u64, 99, 0, 0) == 0
+    bPtr.pool.sync()
+    discard naganim_async_drain_wakeup(bridge)
+    check naganim_async_pop_completion(bridge, addr futId, addr status, addr intVal, addr floatVal, addr strVal) == 1
+    check futId == 102'u64
+    check status == -1
+    check $strVal == "Unregistered async task opcode: 99"
+
+    # Verify deferred decref wakeup notifies BOTH active bridges when queue transitions 0 -> 1
+    discard flushDeferredDecRefs()
+    discard naganim_async_drain_wakeup(bridge)
+    discard naganim_async_drain_wakeup(bridge2)
+    let dummyList = PyList_New(0)
+    Py_IncRef(dummyList)
+    check dummyList.pyRawRefCount == 2
+    check naganim_retire_pyobj(cast[pointer](dummyList)) == 1
+    check deferredDecRefPendingCount() == 1
+    # Both active bridges receive a wakeup byte on their pipe, and draining flushes the deferred decref
+    check naganim_async_drain_wakeup(bridge) == 1
+    check naganim_async_drain_wakeup(bridge2) == 1
+    check deferredDecRefPendingCount() == 0
+    check dummyList.pyRawRefCount == 1
+    Py_DecRef(dummyList)
+
+    naganim_async_bridge_destroy(bridge2)
+    check naganim_async_active_bridge_count() == 1
     naganim_async_bridge_destroy(bridge)
+    check naganim_async_active_bridge_count() == 0
+    check naganim_async_unregister_op(1) == 0
+    check naganim_async_unregister_op(2) == 0

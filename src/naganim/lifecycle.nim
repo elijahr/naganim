@@ -17,12 +17,23 @@ type
 
 proc NimMain() {.importc: "NimMain", cdecl, gcsafe, raises: [].}
 
-var gNimMainInitialized*: Atomic[bool]
+const
+  NimInitUninit* = 0'i32
+  NimInitRunning* = 1'i32
+  NimInitReady* = 2'i32
+
+var gNimInitState*: Atomic[int32]
 var gRuntimeRefCount*: Atomic[int]
 
 # When NimMain() executes (either at standalone binary startup or on first
-# naganim_init_runtime() call in a shared library), mark gNimMainInitialized = true.
-gNimMainInitialized.store(true, moRelease)
+# naganim_init_runtime() call in a shared library), mark gNimInitState = NimInitReady (2).
+gNimInitState.store(NimInitReady, moRelease)
+
+proc isNimRuntimeInitialized*(): bool {.inline, gcsafe, raises: [].} =
+  gNimInitState.load(moAcquire) == NimInitReady
+
+proc naganim_init_state*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  cint(gNimInitState.load(moAcquire))
 
 var gThreadLastError {.threadvar.}: string
 var gThreadHasError {.threadvar.}: bool
@@ -59,10 +70,18 @@ proc naganim_set_last_error*(msg: cstring) {.exportc, cdecl, dynlib, gcsafe, rai
 var gDeferredFlushHook*: proc() {.cdecl, gcsafe, raises: [].} = nil
 
 proc naganim_init_runtime*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
-  ## Idempotent initialization of the Nim ORC runtime and naganim bridge.
+  ## Idempotent 3-state atomic spin-latch initialization of the Nim ORC runtime and naganim bridge.
+  ## State transitions: 0 (Uninit) -> 1 (Initializing) -> 2 (Ready).
+  ## Concurrent callers observing state 1 spin with cpuRelax() until state 2 is published.
   ## Returns 0 on success, -1 on error.
-  if not gNimMainInitialized.exchange(true, moAcquireRelease):
-    NimMain()
+  if gNimInitState.load(moAcquire) != NimInitReady:
+    var expected: int32 = NimInitUninit
+    if gNimInitState.compareExchange(expected, NimInitRunning, moAcquireRelease, moAcquire):
+      NimMain()
+      gNimInitState.store(NimInitReady, moRelease)
+    else:
+      while gNimInitState.load(moAcquire) != NimInitReady:
+        cpuRelax()
   discard gRuntimeRefCount.fetchAdd(1, moAcquireRelease)
   if not gDeferredFlushHook.isNil:
     gDeferredFlushHook()

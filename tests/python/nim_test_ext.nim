@@ -110,4 +110,63 @@ proc flush_pending_decrefs*(): int64 {.exportpy.} =
   ## the number of decremented `PyObject*` references.
   int64(flushDeferredDecRefs())
 
+proc make_readonly_pinned_bytes*(n: int64): PinnedBuffer[byte] {.exportpy.} =
+  ## Allocates a read-only zero-copy `PinnedBuffer[byte]` of length `n`.
+  if n < 0:
+    raise newException(ValueError, "make_readonly_pinned_bytes length cannot be negative")
+  var tmp = newSeq[byte](int(n))
+  for i in 0 ..< int(n):
+    tmp[i] = byte((i + 10) and 0xFF)
+  var roBuf = newPinnedBufferFromOpenArray(tmp, readonly = true)
+  gLastPinnedBuf = roBuf
+  return roBuf
+
+proc scale_cint_float*(x: float, factor: cint): float {.exportpy.} =
+  ## Multiplies a Nim `float` by a `cint` factor.
+  x * float(factor)
+
+proc bitmask_u64*(mask: uint64, shift: uint32, offset: csize_t): uint64 {.exportpy.} =
+  ## Shifts `mask` left by `shift` bits and adds `offset`.
+  (mask shl shift) + uint64(offset)
+
+proc writeExtErrBuf(buf: ptr char, cap: csize_t, msg: string) {.inline, gcsafe, raises: [].} =
+  if buf.isNil or cap == 0:
+    return
+  let n = min(msg.len, int(cap) - 1)
+  if n > 0:
+    copyMem(buf, unsafeAddr msg[0], n)
+  cast[ptr UncheckedArray[char]](buf)[n] = '\0'
+
+proc extComputeSumSquares(
+  argA: int64,
+  argB: int64,
+  outResult: ptr int64,
+  outErrBuf: ptr char,
+  errBufCap: csize_t
+): cint {.cdecl, gcsafe.} =
+  if argB < argA:
+    writeExtErrBuf(outErrBuf, errBufCap, "invalid range: argB < argA")
+    return -1
+  var acc: int64 = 0
+  for i in argA .. argB:
+    acc += i * i
+  outResult[] = acc
+  return 0
+
+proc extComputeDeliberateError(
+  argA: int64,
+  argB: int64,
+  outResult: ptr int64,
+  outErrBuf: ptr char,
+  errBufCap: csize_t
+): cint {.cdecl, gcsafe.} =
+  discard argA
+  discard argB
+  discard outResult
+  writeExtErrBuf(outErrBuf, errBufCap, "ValueError: deliberate worker failure")
+  return -1
+
+discard naganim_async_register_op(1, extComputeSumSquares)
+discard naganim_async_register_op(2, extComputeDeliberateError)
+
 naganimInitModule("nim_test_ext", "Live Nim test extension for naganim pytest suite")

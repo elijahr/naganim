@@ -15,6 +15,10 @@ import lockfree/taskpool
 import ./lifecycle
 import ./gc_bridge
 
+const
+  MaxActiveAsyncBridges* = 64
+  MaxRegisteredComputeOps* = 256
+
 type
   NaganimCompletionKind* = enum
     pckFutureOk = 0
@@ -31,6 +35,14 @@ type
     strLen*: int
 
   NaganimIntTaskProc* = proc(arg: int64): int64 {.cdecl, gcsafe.}
+
+  NaganimComputeOpProc* = proc(
+    argA: int64,
+    argB: int64,
+    outResult: ptr int64,
+    outErrBuf: ptr char,
+    errBufCap: csize_t
+  ): cint {.cdecl, gcsafe.}
 
   NaganimTaskCtx = object
     bridge: ptr NaganimAsyncBridge
@@ -50,8 +62,58 @@ type
     pool*: TaskPool
     poolInitialized*: bool
 
-var gActiveBridgeForDecRef*: Atomic[pointer]
-var gPopStringReturnBuf* {.threadvar.}: string
+var
+  gActiveBridgeForDecRef*: Atomic[pointer]
+  gActiveAsyncBridges: array[MaxActiveAsyncBridges, Atomic[pointer]]
+  gRegisteredComputeOps: array[MaxRegisteredComputeOps, Atomic[pointer]]
+  gPopStringReturnBuf* {.threadvar.}: string
+
+proc registerActiveBridge(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} =
+  if bridge.isNil:
+    return
+  let raw = cast[pointer](bridge)
+  gActiveBridgeForDecRef.store(raw, moRelease)
+  for i in 0 ..< MaxActiveAsyncBridges:
+    if gActiveAsyncBridges[i].load(moAcquire) == raw:
+      return
+  for i in 0 ..< MaxActiveAsyncBridges:
+    var expected: pointer = nil
+    if gActiveAsyncBridges[i].compareExchange(expected, raw, moAcquireRelease, moAcquire):
+      return
+
+proc unregisterActiveBridge(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} =
+  if bridge.isNil:
+    return
+  let raw = cast[pointer](bridge)
+  for i in 0 ..< MaxActiveAsyncBridges:
+    var expected = raw
+    discard gActiveAsyncBridges[i].compareExchange(expected, nil, moAcquireRelease, moRelaxed)
+  var expectedPrimary = raw
+  if gActiveBridgeForDecRef.compareExchange(expectedPrimary, nil, moAcquireRelease, moRelaxed):
+    for i in 0 ..< MaxActiveAsyncBridges:
+      let candidate = gActiveAsyncBridges[i].load(moAcquire)
+      if not candidate.isNil:
+        gActiveBridgeForDecRef.store(candidate, moRelease)
+        break
+
+proc activeAsyncBridgeCount*(): int {.gcsafe, raises: [].} =
+  for i in 0 ..< MaxActiveAsyncBridges:
+    if not gActiveAsyncBridges[i].load(moAcquire).isNil:
+      inc result
+
+proc registerAsyncComputeOp*(opCode: cint, fn: NaganimComputeOpProc): cint {.discardable, gcsafe, raises: [].} =
+  if opCode <= 0 or opCode >= MaxRegisteredComputeOps or fn.isNil:
+    setLastError("Invalid async opCode (must be in 1..255 and non-nil callback)")
+    return -1
+  gRegisteredComputeOps[int(opCode)].store(cast[pointer](fn), moRelease)
+  return 0
+
+proc unregisterAsyncComputeOp*(opCode: cint): cint {.discardable, gcsafe, raises: [].} =
+  if opCode <= 0 or opCode >= MaxRegisteredComputeOps:
+    setLastError("Invalid async opCode (must be in 1..255)")
+    return -1
+  gRegisteredComputeOps[int(opCode)].store(nil, moRelease)
+  return 0
 
 proc setFdNonBlocking(fd: cint) {.gcsafe, raises: [].} =
   let flags = fcntl(fd, F_GETFL, 0)
@@ -66,9 +128,16 @@ proc signalBridgeWakeup*(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} 
     discard posix.write(bridge.writeFd, addr b, 1)
 
 proc onDeferredDecRefWakeup() {.cdecl, gcsafe, raises: [].} =
-  let bridge = cast[ptr NaganimAsyncBridge](gActiveBridgeForDecRef.load(moAcquire))
-  if not bridge.isNil:
-    signalBridgeWakeup(bridge)
+  var signaledAny = false
+  for i in 0 ..< MaxActiveAsyncBridges:
+    let bridge = cast[ptr NaganimAsyncBridge](gActiveAsyncBridges[i].load(moAcquire))
+    if not bridge.isNil:
+      signalBridgeWakeup(bridge)
+      signaledAny = true
+  if not signaledAny:
+    let fallback = cast[ptr NaganimAsyncBridge](gActiveBridgeForDecRef.load(moAcquire))
+    if not fallback.isNil:
+      signalBridgeWakeup(fallback)
 
 proc pushCompletionEvent*(bridge: ptr NaganimAsyncBridge, ev: NaganimCompletionEvent) {.gcsafe, raises: [].} =
   if bridge.isNil or bridge.ringPtr.isNil:
@@ -124,15 +193,14 @@ proc createAsyncBridge*(numWorkers: int = 4): ptr NaganimAsyncBridge {.gcsafe.} 
     {.cast(gcsafe).}:
       bridge.pool = initTaskPool(numWorkers)
     bridge.poolInitialized = true
-  gActiveBridgeForDecRef.store(cast[pointer](bridge), moRelease)
-  gDeferredWakeupCallback.store(cast[pointer](onDeferredDecRefWakeup), moRelease)
+  registerActiveBridge(bridge)
+  discard registerDeferredWakeupHook(onDeferredDecRefWakeup)
   return bridge
 
 proc destroyAsyncBridge*(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} =
   if bridge.isNil:
     return
-  var expected = cast[pointer](bridge)
-  discard gActiveBridgeForDecRef.compareExchange(expected, nil, moAcquireRelease, moRelaxed)
+  unregisterActiveBridge(bridge)
   if bridge.poolInitialized:
     {.cast(gcsafe), cast(raises: []).}:
       try:
@@ -230,31 +298,38 @@ proc workerExecuteTask(arg: pointer) {.nimcall, gcsafe.} =
     discard carriedObj
 
   try:
-    case op
-    of 0: # Custom function pointer
-      if customFn.isNil:
-        pushCompletionString(bridge, futId, cint(pckFutureErr), "Null task function pointer")
+    if op == 0 and not customFn.isNil:
+      let res = customFn(a)
+      pushCompletionEvent(bridge, NaganimCompletionEvent(
+        futureId: futId,
+        status: cint(pckFutureOk),
+        intVal: res
+      ))
+    elif op == 0:
+      pushCompletionString(bridge, futId, cint(pckFutureErr), "Null task function pointer")
+    elif op > 0 and op < MaxRegisteredComputeOps:
+      let rawHandler = gRegisteredComputeOps[int(op)].load(moAcquire)
+      if rawHandler.isNil:
+        pushCompletionString(bridge, futId, cint(pckFutureErr), "Unregistered async task opcode: " & $op)
       else:
-        let res = customFn(a)
-        pushCompletionEvent(bridge, NaganimCompletionEvent(
-          futureId: futId,
-          status: cint(pckFutureOk),
-          intVal: res
-        ))
-    of 1: # Parallel sum of squares [a .. b]
-      if b < a:
-        pushCompletionString(bridge, futId, cint(pckFutureErr), "Invalid range: b < a")
-      else:
-        var acc: int64 = 0
-        for x in a .. b:
-          acc += x * x
-        pushCompletionEvent(bridge, NaganimCompletionEvent(
-          futureId: futId,
-          status: cint(pckFutureOk),
-          intVal: acc
-        ))
-    of 2: # Deliberate error test (negative control)
-      pushCompletionString(bridge, futId, cint(pckFutureErr), "TaskError: deliberate worker failure for negative control")
+        let handler = cast[NaganimComputeOpProc](rawHandler)
+        var outVal: int64 = 0
+        var errBuf: array[256, char]
+        errBuf[0] = '\0'
+        let rc = handler(a, b, addr outVal, addr errBuf[0], csize_t(sizeof(errBuf)))
+        if rc == 0:
+          pushCompletionEvent(bridge, NaganimCompletionEvent(
+            futureId: futId,
+            status: cint(pckFutureOk),
+            intVal: outVal
+          ))
+        else:
+          let errMsg =
+            if errBuf[0] != '\0':
+              $cast[cstring](addr errBuf[0])
+            else:
+              "TaskError: registered op " & $op & " failed with status " & $rc
+          pushCompletionString(bridge, futId, cint(pckFutureErr), errMsg)
     else:
       pushCompletionString(bridge, futId, cint(pckFutureErr), "Unknown task opcode: " & $op)
   except CatchableError as e:
@@ -357,6 +432,24 @@ proc naganim_async_pop_completion*(
     if not outStr.isNil:
       outStr[] = nil
   return 1
+
+proc naganim_async_register_op*(
+  opCode: cint,
+  fn: NaganimComputeOpProc
+): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  discard naganim_init_runtime()
+  naganim_clear_error()
+  registerAsyncComputeOp(opCode, fn)
+
+proc naganim_async_unregister_op*(
+  opCode: cint
+): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  discard naganim_init_runtime()
+  naganim_clear_error()
+  unregisterAsyncComputeOp(opCode)
+
+proc naganim_async_active_bridge_count*(): cint {.exportc, cdecl, dynlib, gcsafe, raises: [].} =
+  cint(activeAsyncBridgeCount())
 
 proc naganim_async_submit_compute*(
   bridgePtr: pointer,

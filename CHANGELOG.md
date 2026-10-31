@@ -7,9 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **3-State Atomic `NimMain()` Spin-Latch (`[NAG-CRIT-01]`, `src/naganim/lifecycle.nim`)**:
+  - Replaced the boolean `exchange(true)` guard with a 3-state atomic latch (`0 = Uninit`, `1 = Initializing`, `2 = Ready`) with `compareExchange` and `cpuRelax()` spin-waiting so concurrent threads calling `naganim_init_runtime()` cannot execute Nim code before `NimMain()` finishes.
+- **Unified `PinnedBufferHeader` Lifetime & PEP 3118 Flag Compliance (`[NAG-CRIT-02 & NAG-HIGH-05]`, `src/naganim/buffer.nim`)**:
+  - Unified `PinnedBufferHeader` lifetime under `refCount` (every active C-ABI or PEP 3118 export increments both `exportCount` and `refCount`; releasing an export decrements both, freeing `PinnedBufferHeader` only when `refCount.fetchSub(1, moAcquireRelease) == 1`) and eliminated the racy `hdr.freed` flag.
+  - Enforced PEP 3118 `PyBUF_FORMAT`, `PyBUF_ND`, `PyBUF_STRIDES`, and `PyBUF_WRITABLE` flags in `naganimPyBufferGetBuffer` and `scopedSeqGetBufferC`.
+  - Updated `naganimPyBufferDealloc` to decrement the heap type reference count (`Py_DecRef(pyTypeOf(self))`) after `PyObject_Free(self)`.
+  - Replaced `GC_ref`/`GC_unref` in `ScopedSeqBuffer[T]` with shared-heap `ScopedSeqHeader[T]` atomic reference counting so cross-thread buffer release never touches thread-local ORC state (`[NAG-HIGH-09]`).
+- **Free-Threaded Python (`3.13t`/`3.14t` PEP 703) `PyObj.refCount`, Borrow Guard API & Cached `Py_None` (`[NAG-CRIT-04 & NAG-HIGH-06]`, `src/naganim/abi.nim`, `src/naganim/gc_bridge.nim`)**:
+  - Added runtime detection of 32-byte Free-Threaded `PyObject_FT` headers (`isFreeThreadedRuntime()`) and updated `pyRawRefCount` / `PyObj.refCount` to read `ob_ref_local + (ob_ref_shared shr 2)` on PEP 703 builds.
+  - Added borrow-guard and deferred-reclamation C-ABI primitives (`naganim_enter_borrow`, `naganim_exit_borrow`, `naganim_active_borrowers`, `naganim_retire_pyobj`, `naganim_pop_deferred_decref`, `naganim_pop_deferred_decref_batch`) that suspend deferred `Py_DecRef` reclamation while any thread holds a transient borrowed `PyObject*` reference.
+  - Cached the `Py_None` pointer atomically (`getCachedPyNone`) so `pyIsNone` performs a pointer comparison instead of calling `Py_BuildValue("")` on every check.
+- **General-Purpose Async Compute Op Registry & Multi-Bridge Wakeup (`[NAG-HIGH-03 & NAG-HIGH-07]`, `src/naganim/asyncio.nim`, `python/naganim/asyncio.py`)**:
+  - Replaced the hardcoded `op == 1` (`sum_squares`) / `op == 2` switch in `workerExecuteTask` with a general-purpose lock-free callback table (`naganim_async_register_op`, `naganim_async_unregister_op`, `bridge.register_op`, `bridge.unregister_op`) and moved sample compute ops into the test suite.
+  - Replaced the single-bridge `gActiveBridgeForDecRef` pointer with a multi-bridge registry (`gActiveAsyncBridges`) and multi-hook wakeup list (`registerDeferredWakeupHook`) so multiple concurrent `NaganimAsyncBridge` instances all receive deferred-decref wakeups.
+- **Extended `{.exportpy.}` Type Coverage, Thread-Local C-ABI String Ring & 3-State Module Init (`[NAG-HIGH-08 & NAG-HIGH-09]`, `src/naganim/export_macro.nim`)**:
+  - Added `{.exportpy.}` support for `float`, `cint`, `uint64`, `csize_t`, `uint32`, `int32`, `uint16`, `int16`, `uint8`, `int8`, `cdouble`, and `cfloat`.
+  - Replaced the single thread-local C-ABI return string buffer with a 16-slot thread-local ring (`gCAbiStringReturnRing`).
+  - Converted `gModuleInitState` in `naganimInitModule` to a 3-state atomic spin-latch.
+- **Full `headerkit` Integration in `writer_plugin.py` and `naganim build` CLI (`[NAG-HIGH-10]`, `python/naganim/writer_plugin.py`, `python/naganim/_cli.py`)**:
+  - Rewrote `NaganimWriterPlugin` to construct and transform `headerkit.ir` AST nodes (`Header`, `Function`, `Parameter`, `Struct`, `Field`, `CType`, `Pointer`, `FunctionPointer`), run `NimCleanupTransform` and `NimJsonDocEnricher`, and emit `.pyi` and `.cdef` artifacts via registered `NaganimPyiWriter(PyiWriter)` (`"naganim-pyi"`) and `NaganimCffiWriter(CffiWriter)` (`"naganim-cffi"`).
+  - Added `naganim build <nim_source>` to compile with `nim c --header:<name>.h`, parse and clean the generated header with `headerkit`, and emit `.pyi` and `.cdef` files.
+
 ### Changed
 
-- **Package identity (`naganim` / `elijahr/naganim`)**: Standardized package, module, CLI, macro, and C-ABI symbol namespaces on `naganim` (`naganim.nimble`, `src/naganim*`, `python/naganim/*`, `Naganim*`, `NAGANIM*`) for the `elijahr/naganim` repository.
+- **Package identity (`naganim`)**: Standardized package, module, CLI, macro, and C-ABI symbol namespaces on `naganim` (`naganim.nimble`, `src/naganim*`, `python/naganim/*`, `Naganim*`, `NAGANIM*`) for the `naganim` repository.
 
 ### Added
 

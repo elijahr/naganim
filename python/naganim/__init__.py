@@ -11,25 +11,31 @@ from ._cffi_loader import (
 )
 from .asyncio import AsyncChannel, NaganimAsyncBridge
 from .writer_plugin import (
+    NaganimCffiWriter,
     NaganimFunctionSpec,
     NaganimModuleIr,
     NaganimParamSpec,
+    NaganimPyiWriter,
     NaganimWriterPlugin,
+    parse_c_type_expr,
 )
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "__version__",
     "AsyncChannel",
     "NaganimAsyncBridge",
     "NaganimBufferOwner",
     "NaganimCffiModule",
+    "NaganimCffiWriter",
     "NaganimFunctionSpec",
     "NaganimModuleIr",
     "NaganimParamSpec",
+    "NaganimPyiWriter",
     "NaganimRuntimeError",
     "NaganimWriterPlugin",
+    "__version__",
     "load_abi3_extension",
     "load_cffi_library",
+    "parse_c_type_expr",
 ]
