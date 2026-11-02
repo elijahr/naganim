@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from headerkit import (
+    ChainedFilter,
     CType,
     Field,
     Function,
@@ -31,7 +32,7 @@ from headerkit import (
     WriterBackend,
     get_backend,
     hook,
-     is_writer_available,
+    is_writer_available,
     register_writer,
 )
 from headerkit.writers.cffi import CffiWriter
@@ -54,24 +55,42 @@ typedef struct naganim_buf_view_t naganim_buf_view_t;
 """
 
 
+def _parse_with_headerkit_backends(
+    code: str,
+    filename: str,
+    *,
+    include_dirs: list[str] | None = None,
+    extra_args: list[str] | None = None,
+    **backend_kwargs: Any,
+) -> SourceUnit:
+    """Parse C code into a `SourceUnit` using available `headerkit` backends (`libclang`, `tree-sitter`)."""
+    errors: list[str] = []
+    for backend_name in ("libclang", "tree-sitter"):
+        try:
+            backend = get_backend(backend_name)
+            return backend.parse(
+                code,
+                filename,
+                include_dirs=include_dirs,
+                extra_args=extra_args,
+                **backend_kwargs,
+            )
+        except (RuntimeError, ValueError, KeyError, ImportError, OSError) as exc:
+            errors.append(f"{backend_name}: {exc}")
+            continue
+    raise RuntimeError(
+        f"Failed to parse C header {filename!r} across all headerkit backends "
+        f"({'; '.join(errors)})"
+    )
+
+
 def _parse_c_function_prototypes(prototypes: list[str], filename: str) -> list[Function]:
     """Parse C function prototype lines into `headerkit.ir.Function` AST nodes via `headerkit` backends."""
     if not prototypes:
         return []
     code = _C_STDINT_PREAMBLE + "\n".join(prototypes) + "\n"
-    errors: list[str] = []
-    for backend_name in ("libclang", "tree-sitter"):
-        try:
-            backend = get_backend(backend_name)
-            parsed = backend.parse(code, filename)
-            return [d for d in parsed.declarations if isinstance(d, Function)]
-        except (RuntimeError, ValueError, KeyError, ImportError, OSError) as exc:
-            errors.append(f"{backend_name}: {exc}")
-            continue
-    raise RuntimeError(
-        f"Failed to parse C function prototypes for {filename!r} across all headerkit backends "
-        f"({'; '.join(errors)})"
-    )
+    parsed = _parse_with_headerkit_backends(code, filename)
+    return [d for d in parsed.declarations if isinstance(d, Function)]
 
 
 class NaganimPyiWriter(PyiWriter):
@@ -461,6 +480,19 @@ class NaganimWriterPlugin:
                 )
         return entries
 
+    def _clean_and_enrich_unit(self, unit: SourceUnit) -> Header:
+        """Apply `NimCleanupTransform` and `NimJsonDocEnricher` via `ChainedFilter`."""
+        pipeline = ChainedFilter(
+            NimCleanupTransform(),
+            NimJsonDocEnricher(
+                jsondoc_path=self.jsondoc_path,
+                nim_source_path=self.nim_source_path,
+                entries=self.build_jsondoc_entries(),
+            ),
+        )
+        enriched = pipeline.transform(unit)
+        return Header(path=enriched.path, declarations=list(enriched.declarations))
+
     def parse_and_clean_c_header(
         self,
         header_code: str | None = None,
@@ -478,37 +510,14 @@ class NaganimWriterPlugin:
         cleanup = NimCleanupTransform()
         base_inc_dirs = [str(resolved_path.parent)] if resolved_path is not None else []
         inc, args, b_opts = cleanup.prepare_parse(code, filename, base_inc_dirs, [])
-        parsed: SourceUnit | None = None
-        errors: list[str] = []
-        for backend_name in ("libclang", "tree-sitter"):
-            try:
-                backend = get_backend(backend_name)
-                parsed = backend.parse(
-                    code,
-                    filename,
-                    include_dirs=inc,
-                    extra_args=args,
-                    **b_opts,
-                )
-                break
-            except (RuntimeError, ValueError, KeyError, ImportError, OSError) as exc:
-                errors.append(f"{backend_name}: {exc}")
-                parsed = None
-
-        if parsed is None:
-            raise RuntimeError(
-                f"Failed to parse C header {filename!r} across all headerkit backends "
-                f"({'; '.join(errors)})"
-            )
-
-        cleaned = cleanup.apply(parsed)
-        enricher = NimJsonDocEnricher(
-            jsondoc_path=self.jsondoc_path,
-            nim_source_path=self.nim_source_path,
-            entries=self.build_jsondoc_entries(),
+        parsed = _parse_with_headerkit_backends(
+            code,
+            filename,
+            include_dirs=inc,
+            extra_args=args,
+            **b_opts,
         )
-        enriched = enricher.apply(cleaned)
-        return Header(path=enriched.path, declarations=list(enriched.declarations))
+        return self._clean_and_enrich_unit(parsed)
 
     def to_pyi_header(self) -> Header:
         """Build a `headerkit.ir.Header` for the Python module interface and run `NimCleanupTransform` + `NimJsonDocEnricher`."""
@@ -531,14 +540,7 @@ class NaganimWriterPlugin:
                 )
             )
         raw_unit = SourceUnit(path=f"{self.ir.module}.h", declarations=decls)
-        cleaned_unit = NimCleanupTransform().apply(raw_unit)
-        enricher = NimJsonDocEnricher(
-            jsondoc_path=self.jsondoc_path,
-            nim_source_path=self.nim_source_path,
-            entries=self.build_jsondoc_entries(),
-        )
-        enriched_unit = enricher.apply(cleaned_unit)
-        return Header(path=enriched_unit.path, declarations=list(enriched_unit.declarations))
+        return self._clean_and_enrich_unit(raw_unit)
 
     def to_cffi_header(self) -> Header:
         """Build a `headerkit.ir.Header` for the CFFI C-ABI surface and run `NimCleanupTransform` + `NimJsonDocEnricher`."""
@@ -578,14 +580,7 @@ class NaganimWriterPlugin:
                     known_names.add(d_name)
 
         raw_unit = SourceUnit(path=f"{self.ir.module}.h", declarations=decls)
-        cleaned_unit = NimCleanupTransform().apply(raw_unit)
-        enricher = NimJsonDocEnricher(
-            jsondoc_path=self.jsondoc_path,
-            nim_source_path=self.nim_source_path,
-            entries=self.build_jsondoc_entries(),
-        )
-        enriched_unit = enricher.apply(cleaned_unit)
-        return Header(path=enriched_unit.path, declarations=list(enriched_unit.declarations))
+        return self._clean_and_enrich_unit(raw_unit)
 
     def generate_pyi_stub(self) -> str:
         """Render PEP 484 `.pyi` stub using `headerkit`'s `PyiWriter` (`NaganimPyiWriter`)."""

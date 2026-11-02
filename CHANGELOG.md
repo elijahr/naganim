@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Orthogonal `NimCleanupTransform.prepare_parse()` Integration (`python/naganim/writer_plugin.py`)**:
-  - Updated `NaganimWriterPlugin.parse_and_clean_c_header()` to invoke `cleanup.prepare_parse(code, filename, base_inc_dirs, [])` and pass `include_dirs=inc, extra_args=args, **b_opts` to `backend.parse(...)` before `cleanup.apply(parsed)`, aligning with `headerkit`'s zero-leak Layer-1/Layer-2 separation.
+- **Orthogonal `NimCleanupTransform.prepare_parse()` & Unified `ChainedFilter` Pipeline (`python/naganim/writer_plugin.py`)**:
+  - Updated `NaganimWriterPlugin.parse_and_clean_c_header()` to invoke `cleanup.prepare_parse(code, filename, base_inc_dirs, [])` and consolidated duplicated backend parsing (`_parse_with_headerkit_backends`) and transform chains (`_clean_and_enrich_unit` via `ChainedFilter([NimCleanupTransform(), NimJsonDocEnricher(...)])`) across `parse_and_clean_c_header()`, `to_pyi_header()`, and `to_cffi_header()`.
 - **Holistic Adversarial Audit Remediations (`python/naganim/asyncio.py`, `src/naganim/asyncio.nim`, `src/naganim/abi.nim`, `python/naganim/writer_plugin.py`, `python/naganim/_cli.py`, `pyproject.toml`, `.gitignore`)**:
   - Unregistered CFFI compute callbacks in `NaganimAsyncBridge.close()` before clearing `_op_callbacks`, and released the GIL (`PyEval_SaveThread`/`PyEval_RestoreThread`) around `bridge.pool.sync()` and `bridge.pool.shutdown(wait = true)` in `destroyAsyncBridge` to prevent AB-BA GIL/TaskPool deadlocks.
   - Removed local `/Users/eek/Development/headerkit` paths from `pyproject.toml` (`[tool.uv.sources]`, `mypy_path`, `pythonpath`), prioritized `("libclang", "tree-sitter")` with explicit `RuntimeError` reporting in `NaganimWriterPlugin`, wrapped `nimcache_dir` in `tempfile.TemporaryDirectory` in `naganim build`, guarded `isFreeThreadedRuntime()` with `when sizeof(pointer) == 8`, and untracked local ceremony documents.
