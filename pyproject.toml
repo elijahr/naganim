@@ -31,6 +31,9 @@ mypy_path = ["python"]
 [project.scripts]
 naganim = "naganim._cli:main"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["python/naganim"]
 
