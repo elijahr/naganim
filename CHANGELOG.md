@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HeaderKit Roundtable v2 Pin & Backend C-Prototype Parsing (`pyproject.toml`, `python/naganim/writer_plugin.py`, `python/naganim/__init__.py`)**:
+  - Pinned `headerkit` dependency to `git+https://github.com/axiomantic/headerkit.git@feat/headerkit-roundtable-v2`.
+  - Replaced bespoke string-splitting `parse_c_type_expr` with `headerkit` backend C-prototype AST parsing (`_parse_c_function_prototypes`) and `Parameter.type_overrides` / `Function.return_type_overrides` on `NaganimWriterPlugin.to_pyi_header()`.
 - **3-State Atomic `NimMain()` Spin-Latch (`[NAG-CRIT-01]`, `src/naganim/lifecycle.nim`)**:
   - Replaced the boolean `exchange(true)` guard with a 3-state atomic latch (`0 = Uninit`, `1 = Initializing`, `2 = Ready`) with `compareExchange` and `cpuRelax()` spin-waiting so concurrent threads calling `naganim_init_runtime()` cannot execute Nim code before `NimMain()` finishes.
 - **Unified `PinnedBufferHeader` Lifetime & PEP 3118 Flag Compliance (`[NAG-CRIT-02 & NAG-HIGH-05]`, `src/naganim/buffer.nim`)**:

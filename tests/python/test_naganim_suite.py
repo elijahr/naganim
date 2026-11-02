@@ -379,7 +379,7 @@ def test_writer_plugin_and_cli(compiled_ext_path: Path, tmp_path: Path) -> None:
     expected_pyi = "\n".join(expected_lines)
     assert pyi_text == expected_pyi
     assert "int naganim_c_add_ints(int64_t a, int64_t b, int64_t * out_res);" in cdef_text
-    assert "int naganim_c_make_pinned_bytes(int64_t n, struct naganim_buf_view_t * out_res);" in cdef_text
+    assert "int naganim_c_make_pinned_bytes(int64_t n, naganim_buf_view_t * out_res);" in cdef_text
     assert "int naganim_enter_borrow(void);" in cdef_text
     assert "int naganim_pop_deferred_decref(void ** out_ptr);" in cdef_text
 

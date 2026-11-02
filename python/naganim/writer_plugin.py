@@ -51,40 +51,35 @@ _PYTHON_PASSTHROUGH_TYPES: frozenset[str] = frozenset(
 )
 
 
-def parse_c_type_expr(c_type_str: str) -> TypeExpr:
-    """Convert a C type declaration string into a `headerkit.ir.TypeExpr` AST node."""
-    s = c_type_str.strip()
-    if not s:
-        return CType(name="void")
+_C_STDINT_PREAMBLE = """\
+typedef signed char int8_t;
+typedef short int16_t;
+typedef int int32_t;
+typedef long long int64_t;
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
+typedef unsigned long size_t;
+typedef long ssize_t;
+typedef _Bool bool;
+typedef struct naganim_buf_view_t naganim_buf_view_t;
+"""
 
-    # Handle function pointer syntax: `ret (*)(params...)`
-    if "(*)" in s:
-        ret_part, rest = s.split("(*)", 1)
-        ret_expr = parse_c_type_expr(ret_part.strip())
-        rest = rest.strip()
-        params_list: list[Parameter] = []
-        if rest.startswith("(") and rest.endswith(")"):
-            inner = rest[1:-1].strip()
-            if inner and inner != "void":
-                for p_str in inner.split(","):
-                    params_list.append(Parameter(name=None, type=parse_c_type_expr(p_str.strip())))
-        return Pointer(pointee=FunctionPointer(return_type=ret_expr, parameters=params_list))
 
-    ptr_depth = 0
-    while s.endswith("*"):
-        ptr_depth += 1
-        s = s[:-1].strip()
-
-    qualifiers: list[str] = []
-    tokens = s.split()
-    while tokens and tokens[0] in ("const", "volatile", "restrict"):
-        qualifiers.append(tokens.pop(0))
-
-    base_name = " ".join(tokens) if tokens else "void"
-    expr: TypeExpr = CType(name=base_name, qualifiers=qualifiers)
-    for _ in range(ptr_depth):
-        expr = Pointer(pointee=expr)
-    return expr
+def _parse_c_function_prototypes(prototypes: list[str], filename: str) -> list[Function]:
+    """Parse C function prototype lines into `headerkit.ir.Function` AST nodes via `headerkit` backends."""
+    if not prototypes:
+        return []
+    code = _C_STDINT_PREAMBLE + "\n".join(prototypes) + "\n"
+    for backend_name in ("tree-sitter", "libclang"):
+        try:
+            backend = get_backend(backend_name)
+            parsed = backend.parse(code, filename)
+            return [d for d in parsed.declarations if isinstance(d, Function)]
+        except (RuntimeError, ValueError, KeyError, ImportError, OSError):
+            continue
+    return []
 
 
 class NaganimPyiWriter(PyiWriter):
@@ -503,7 +498,7 @@ class NaganimWriterPlugin:
 
         filename = str(resolved_path.name) if resolved_path is not None else f"{self.ir.module}.h"
         parsed: SourceUnit | None = None
-        for backend_name in ("treesitter", "libclang"):
+        for backend_name in ("tree-sitter", "libclang"):
             try:
                 backend = get_backend(backend_name)
                 inc_dirs = [str(resolved_path.parent)] if resolved_path is not None else None
@@ -532,6 +527,7 @@ class NaganimWriterPlugin:
                 Parameter(
                     name=f"{p.name}_p{idx}",
                     type=CType(name=p.py_type),
+                    type_overrides={"pyi": p.py_type},
                 )
                 for idx, p in enumerate(fn.params)
             ]
@@ -540,6 +536,7 @@ class NaganimWriterPlugin:
                     name=fn.name,
                     return_type=CType(name=fn.return_py_type),
                     parameters=params,
+                    type_overrides={"pyi": fn.return_py_type},
                 )
             )
         raw_unit = SourceUnit(path=f"{self.ir.module}.h", declarations=decls)
@@ -559,28 +556,18 @@ class NaganimWriterPlugin:
             getattr(d, "name", "") for d in decls if getattr(d, "name", None)
         }
 
+        proto_lines: list[str] = []
         for fn in self.ir.functions:
             if not fn.has_c_abi:
                 continue
-            c_params: list[Parameter] = [
-                Parameter(name=f"{p.name}_p{idx}", type=parse_c_type_expr(p.c_type))
-                for idx, p in enumerate(fn.params)
-            ]
+            param_decls = [f"{p.c_type} {p.name}_p{idx}" for idx, p in enumerate(fn.params)]
             if fn.return_nim_type != "void" and fn.return_c_type != "void":
-                c_params.append(
-                    Parameter(
-                        name="out_res",
-                        type=Pointer(pointee=parse_c_type_expr(fn.return_c_type)),
-                    )
-                )
-            decls.append(
-                Function(
-                    name=fn.c_symbol,
-                    return_type=CType(name="int"),
-                    parameters=c_params,
-                )
-            )
+                param_decls.append(f"{fn.return_c_type}* out_res")
+            params_str = ", ".join(param_decls) if param_decls else "void"
+            proto_lines.append(f"int {fn.c_symbol}({params_str});")
             known_names.add(fn.c_symbol)
+
+        decls.extend(_parse_c_function_prototypes(proto_lines, f"{self.ir.module}.h"))
 
         # Merge any additional exported C functions parsed from `--header`
         if self.c_header_code is not None or (

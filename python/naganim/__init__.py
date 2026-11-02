@@ -17,7 +17,6 @@ from .writer_plugin import (
     NaganimParamSpec,
     NaganimPyiWriter,
     NaganimWriterPlugin,
-    parse_c_type_expr,
 )
 
 __version__ = "0.1.0"
@@ -37,5 +36,4 @@ __all__ = [
     "__version__",
     "load_abi3_extension",
     "load_cffi_library",
-    "parse_c_type_expr",
 ]
