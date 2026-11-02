@@ -475,13 +475,21 @@ class NaganimWriterPlugin:
             return Header(path=str(resolved_path or f"{self.ir.module}.h"), declarations=[])
 
         filename = str(resolved_path.name) if resolved_path is not None else f"{self.ir.module}.h"
+        cleanup = NimCleanupTransform()
+        base_inc_dirs = [str(resolved_path.parent)] if resolved_path is not None else []
+        inc, args, b_opts = cleanup.prepare_parse(code, filename, base_inc_dirs, [])
         parsed: SourceUnit | None = None
         errors: list[str] = []
         for backend_name in ("libclang", "tree-sitter"):
             try:
                 backend = get_backend(backend_name)
-                inc_dirs = [str(resolved_path.parent)] if resolved_path is not None else None
-                parsed = backend.parse(code, filename, include_dirs=inc_dirs)
+                parsed = backend.parse(
+                    code,
+                    filename,
+                    include_dirs=inc,
+                    extra_args=args,
+                    **b_opts,
+                )
                 break
             except (RuntimeError, ValueError, KeyError, ImportError, OSError) as exc:
                 errors.append(f"{backend_name}: {exc}")
@@ -493,7 +501,7 @@ class NaganimWriterPlugin:
                 f"({'; '.join(errors)})"
             )
 
-        cleaned = NimCleanupTransform().apply(parsed)
+        cleaned = cleanup.apply(parsed)
         enricher = NimJsonDocEnricher(
             jsondoc_path=self.jsondoc_path,
             nim_source_path=self.nim_source_path,
