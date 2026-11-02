@@ -249,6 +249,9 @@ class NaganimAsyncBridge:
                 if not fut.done():
                     fut.cancel()
             self._futures.clear()
+            for op_code in list(self._op_callbacks):
+                with contextlib.suppress(Exception):
+                    self._lib.naganim_async_unregister_op(int(op_code))
             self._op_callbacks.clear()
 
     async def __aenter__(self) -> Self:

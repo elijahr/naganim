@@ -281,15 +281,18 @@ proc isFreeThreadedRuntime*(): bool {.inline, gcsafe, raises: [].} =
   let cached = gFreeThreadedRuntimeState.load(moAcquire)
   if likely(cached != 0'i32):
     return cached == 2'i32
-  let t = PyBool_FromLong(1)
-  let f = PyBool_FromLong(0)
-  if t.isNil or f.isNil:
-    return false
-  let tWords = cast[ptr UncheckedArray[uint64]](t)
-  let fWords = cast[ptr UncheckedArray[uint64]](f)
-  result = (tWords[3] == fWords[3]) and (tWords[3] != 0'u64)
-  Py_DecRef(t)
-  Py_DecRef(f)
+  when sizeof(pointer) == 8:
+    let t = PyBool_FromLong(1)
+    let f = PyBool_FromLong(0)
+    if t.isNil or f.isNil:
+      return false
+    let tWords = cast[ptr UncheckedArray[uint64]](t)
+    let fWords = cast[ptr UncheckedArray[uint64]](f)
+    result = (tWords[3] == fWords[3]) and (tWords[3] != 0'u64)
+    Py_DecRef(t)
+    Py_DecRef(f)
+  else:
+    result = false
   gFreeThreadedRuntimeState.store(if result: 2'i32 else: 1'i32, moRelease)
 
 proc pyTypeOf*(obj: PyObjectPtr): PyObjectPtr {.inline, gcsafe, raises: [].} =

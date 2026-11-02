@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Holistic Adversarial Audit Remediations (`python/naganim/asyncio.py`, `src/naganim/asyncio.nim`, `src/naganim/abi.nim`, `python/naganim/writer_plugin.py`, `python/naganim/_cli.py`, `pyproject.toml`, `.gitignore`)**:
+  - Unregistered CFFI compute callbacks in `NaganimAsyncBridge.close()` before clearing `_op_callbacks`, and released the GIL (`PyEval_SaveThread`/`PyEval_RestoreThread`) around `bridge.pool.sync()` and `bridge.pool.shutdown(wait = true)` in `destroyAsyncBridge` to prevent AB-BA GIL/TaskPool deadlocks.
+  - Removed local `/Users/eek/Development/headerkit` paths from `pyproject.toml` (`[tool.uv.sources]`, `mypy_path`, `pythonpath`), prioritized `("libclang", "tree-sitter")` with explicit `RuntimeError` reporting in `NaganimWriterPlugin`, wrapped `nimcache_dir` in `tempfile.TemporaryDirectory` in `naganim build`, guarded `isFreeThreadedRuntime()` with `when sizeof(pointer) == 8`, and untracked local ceremony documents.
 - **HeaderKit Roundtable v2 Pin & Backend C-Prototype Parsing (`pyproject.toml`, `python/naganim/writer_plugin.py`, `python/naganim/__init__.py`)**:
   - Pinned `headerkit` dependency to `git+https://github.com/axiomantic/headerkit.git@feat/headerkit-roundtable-v2`.
   - Replaced bespoke string-splitting `parse_c_type_expr` with `headerkit` backend C-prototype AST parsing (`_parse_c_function_prototypes`) and `Parameter.type_overrides` / `Function.return_type_overrides` on `NaganimWriterPlugin.to_pyi_header()`.

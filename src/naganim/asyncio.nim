@@ -12,6 +12,7 @@ import std/[atomics, options, posix]
 import lockfree/bqueue128
 import lockfree/stack
 import lockfree/taskpool
+import ./abi
 import ./lifecycle
 import ./gc_bridge
 
@@ -202,12 +203,20 @@ proc destroyAsyncBridge*(bridge: ptr NaganimAsyncBridge) {.gcsafe, raises: [].} 
     return
   unregisterActiveBridge(bridge)
   if bridge.poolInitialized:
+    let releaseGil = hasPythonThreadState() and not isFreeThreadedRuntime()
+    let savedThreadState =
+      if releaseGil:
+        PyEval_SaveThread()
+      else:
+        nil
     {.cast(gcsafe), cast(raises: []).}:
       try:
         bridge.pool.sync()
         bridge.pool.shutdown(wait = true)
       except Exception:
         discard
+    if releaseGil:
+      PyEval_RestoreThread(savedThreadState)
     bridge.poolInitialized = false
   discard flushDeferredDecRefs()
   var rawBox: pointer = nil

@@ -78,34 +78,35 @@ def _run_build(argv: list[str]) -> int:
     out_pyi = Path(args.out_pyi).resolve() if args.out_pyi else out_dir / f"{stem}.pyi"
     out_cdef = Path(args.out_cdef).resolve() if args.out_cdef else out_dir / f"{stem}.cdef"
 
-    nimcache_dir = Path(tempfile.mkdtemp(prefix=f"naganim_build_{stem}_"))
-    cmd = [
-        "nim",
-        "c",
-        "--app:lib",
-        "--mm:orc",
-        "--threads:on",
-        "-d:naganimExtensionModule",
-        f"--nimcache:{nimcache_dir}",
-        f"--header:{header_name}",
-    ]
-    for p in args.nim_path:
-        cmd.append(f"--path:{p}")
-    cmd.extend([f"-o:{out_lib}", str(nim_src)])
+    with tempfile.TemporaryDirectory(prefix=f"naganim_build_{stem}_") as tmp_dir:
+        nimcache_dir = Path(tmp_dir)
+        cmd = [
+            "nim",
+            "c",
+            "--app:lib",
+            "--mm:orc",
+            "--threads:on",
+            "-d:naganimExtensionModule",
+            f"--nimcache:{nimcache_dir}",
+            f"--header:{header_name}",
+        ]
+        for p in args.nim_path:
+            cmd.append(f"--path:{p}")
+        cmd.extend([f"-o:{out_lib}", str(nim_src)])
 
-    subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
 
-    header_path = nimcache_dir / header_name
-    c_header_arg: Path | None = header_path if header_path.exists() else None
+        header_path = nimcache_dir / header_name
+        c_header_arg: Path | None = header_path if header_path.exists() else None
 
-    mod = load_cffi_library(
-        out_lib,
-        c_header_path=c_header_arg,
-        nim_source_path=nim_src,
-    )
-    plugin = mod.plugin
-    out_pyi.write_text(plugin.generate_pyi_stub(), encoding="utf-8")
-    out_cdef.write_text(plugin.generate_cffi_cdef(), encoding="utf-8")
+        mod = load_cffi_library(
+            out_lib,
+            c_header_path=c_header_arg,
+            nim_source_path=nim_src,
+        )
+        plugin = mod.plugin
+        out_pyi.write_text(plugin.generate_pyi_stub(), encoding="utf-8")
+        out_cdef.write_text(plugin.generate_cffi_cdef(), encoding="utf-8")
     return 0
 
 

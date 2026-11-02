@@ -1,8 +1,14 @@
-# Vine / Rhizo workspace metadata
+# Vine / Rhizo / Garden workspace metadata
 .envrc
 .vine.json
 *.lock
 .rhizo.*
+audit_report.md
+design.md
+implementation_plan.md
+understanding.md
+garden-prompts.md
+garden-swarm.json
 
 # Nim build artifacts
 nimcache/

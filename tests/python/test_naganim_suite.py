@@ -237,6 +237,13 @@ async def test_asyncio_bridge_taskpool_offloading_and_channel(cffi_ext: NaganimC
         finally:
             bridge.unregister_op(10)
 
+        # Register op 11 on second_bridge without manual unregister; closing second_bridge must unregister it
+        second_bridge.register_op(11, lambda a, b: a - b)
+        assert await second_bridge.submit_compute(11, 20, 5) == 15
+        second_bridge.close()
+        with pytest.raises(NaganimRuntimeError, match="Unregistered async task opcode: 11"):
+            await bridge.submit_compute(11, 20, 5)
+
         # Negative control: task raising error on worker thread rejects the asyncio.Future
         with pytest.raises(NaganimRuntimeError, match="deliberate worker failure"):
             await bridge.submit_compute(2, 0, 0)

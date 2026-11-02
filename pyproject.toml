@@ -14,9 +14,6 @@ dependencies = [
     "headerkit @ git+https://github.com/axiomantic/headerkit.git@feat/headerkit-roundtable-v2",
 ]
 
-[tool.uv.sources]
-headerkit = { path = "/Users/eek/Development/headerkit", editable = true }
-
 [project.optional-dependencies]
 dev = [
     "mypy>=1.10.0",
@@ -29,7 +26,7 @@ dev = [
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
-mypy_path = ["python", "/Users/eek/Development/headerkit"]
+mypy_path = ["python"]
 
 [project.scripts]
 naganim = "naganim._cli:main"
@@ -39,7 +36,7 @@ packages = ["python/naganim"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
-pythonpath = ["python", "/Users/eek/Development/headerkit"]
+pythonpath = ["python"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ""
