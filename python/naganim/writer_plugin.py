@@ -28,7 +28,6 @@ from headerkit import (
     Priority,
     SourceUnit,
     Struct,
-    TypeExpr,
     WriterBackend,
     get_backend,
     hook,
@@ -37,7 +36,6 @@ from headerkit import (
 )
 from headerkit.writers.cffi import CffiWriter
 from headerkit.writers.pyi import PyiWriter
-
 
 _C_STDINT_PREAMBLE = """\
 typedef signed char int8_t;

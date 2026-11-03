@@ -11,7 +11,7 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "cffi>=1.16.0",
-    "headerkit @ git+https://github.com/axiomantic/headerkit.git@feat/headerkit-roundtable-v2",
+    "headerkit>=0.50.0",
 ]
 
 [project.optional-dependencies]
