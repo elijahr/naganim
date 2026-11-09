@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrated `NaganimWriterPlugin` to `headerkit`'s `NimBackend` (`python/naganim/writer_plugin.py`, `python/naganim/_cli.py`)**:
+  - Replaced `NimCleanupTransform` and `NimJsonDocEnricher` usage with `NimBackend.prepare_c_parse_args`, `clean_nim_c_unit`, and `DocParserTransform` (`SourceMeta` and `ParsedDoc`).
+
 ### Fixed
 
 - **Orthogonal `NimCleanupTransform.prepare_parse()` & Unified `ChainedFilter` Pipeline (`python/naganim/writer_plugin.py`)**:

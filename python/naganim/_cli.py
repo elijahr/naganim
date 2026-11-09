@@ -23,7 +23,7 @@ def _shared_lib_suffix() -> str:
 def _run_build(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="naganim build",
-        description="Compile a Nim source file with --header:<name>.h, parse with headerkit + NimCleanupTransform + NimJsonDocEnricher, and emit .pyi and .cdef files.",
+        description="Compile a Nim source file with --header:<name>.h, parse with headerkit + NimBackend + DocParserTransform, and emit .pyi and .cdef files.",
     )
     parser.add_argument(
         "nim_source",
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--nim-source",
-        help="Optional path to the Nim source file for NimJsonDocEnricher enrichment",
+        help="Optional path to the Nim source file for NimBackend AST & docstring enrichment",
         default=None,
     )
     parser.add_argument(
