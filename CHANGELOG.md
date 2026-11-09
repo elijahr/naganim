@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Experimental / Pre-Alpha Status Notice (`README.md`, `pyproject.toml`)**:
+  - Added Experimental status badge and `[!WARNING]` callout in `README.md` and `Development Status :: 2 - Pre-Alpha` classifier in `pyproject.toml`.
 - **Migrated `NaganimWriterPlugin` to `headerkit`'s `NimBackend` (`python/naganim/writer_plugin.py`, `python/naganim/_cli.py`)**:
   - Replaced `NimCleanupTransform` and `NimJsonDocEnricher` usage with `NimBackend.prepare_c_parse_args`, `clean_nim_c_unit`, and `DocParserTransform` (`SourceMeta` and `ParsedDoc`).
 
