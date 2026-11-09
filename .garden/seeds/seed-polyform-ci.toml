@@ -1,8 +1,0 @@
-id = "seed-polyform-ci"
-title = "Phase 5: polyform Template Upgrades for has_nim + has_python + headerkit + 3.13t-3.15t + nimony CI"
-season = "v0.1.0"
-sunlight = "medium"
-tags = ["polyform", "ci", "freethreaded", "nimony"]
-status = "SOWN"
-created_at = "2026-10-28T10:05:32Z"
-updated_at = "2026-10-28T10:05:32Z"

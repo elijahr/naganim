@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Public Release Preparation (`README.md`, `LICENSE`, `pyproject.toml`, `.gitignore`, `docs/`)**:
+  - Untracked and git-ignored `.garden/`, `garden.toml`, and `vine.toml`, added MIT `LICENSE`, completed `pyproject.toml` URLs/keywords/classifiers, expanded `README.md`, and added `docs/index.md`, `docs/architecture.md`, and `docs/api-reference.md`.
 - **Experimental / Pre-Alpha Status Notice (`README.md`, `pyproject.toml`)**:
   - Added Experimental status badge and `[!WARNING]` callout in `README.md` and `Development Status :: 2 - Pre-Alpha` classifier in `pyproject.toml`.
 - **Migrated `NaganimWriterPlugin` to `headerkit`'s `NimBackend` (`python/naganim/writer_plugin.py`, `python/naganim/_cli.py`)**:

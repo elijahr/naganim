@@ -1,2 +1,0 @@
-primary_branch = "main"
-test_command = "nimble test"
