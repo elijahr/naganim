@@ -73,7 +73,7 @@ Annotate any Nim proc with `{.exportpy.}` (or `{.pyexport.}`) and call `naganimI
 
 ### 2. Zero-Copy PEP 3118 Buffer Protocol (`src/naganim/buffer.nim`)
 - **Tier 1 (`PinnedBuffer[T]`)**: Allocated on the shared heap (`allocShared0`) with unified atomic `refCount` and `exportCount`. Immune to Nim `seq[T]` reallocation; freed only when both Nim owners and all Python `memoryview` / CFFI consumers release their views.
-- **Tier 2 (`ScopedSeqBuffer[T]`)**: Wraps a Nim `seq[T]` with an atomic `exportCount` guard. Mutating or resizing (`mutateAdd`, `mutateSetLen`) while a Python `memoryview` is exported raises `BufferExportedDefect` (mapped to Python `BufferError`).
+- **Tier 2 (`ScopedSeqBuffer[T]`)**: Wraps a Nim `seq[T]` with an atomic `exportCount` guard. Resizing (`add`, `setLen`) while a Python `memoryview` is exported raises `BufferExportedDefect` (mapped to Python `BufferError`).
 
 ### 3. Lock-Free Deferred `Py_DecRef` GC Bridge (`src/naganim/gc_bridge.nim`)
 - `PyObj` wraps `PyObjectPtr` with Nim 2.0 ARC/ORC `=destroy`, `=copy`, and `=sink` hooks.
@@ -112,9 +112,8 @@ proc scale_series*(values: seq[float64], factor: float64): seq[float64] {.export
 proc make_iota_buffer*(n: int64): PinnedBuffer[uint8] {.exportpy.} =
   ## Allocate a zero-copy PEP 3118 PinnedBuffer[uint8] of length `n`.
   var buf = newPinnedBuffer[uint8](int(n), readonly = false)
-  let data = buf.dataOpenArray()
   for i in 0 ..< int(n):
-    data[i] = uint8(i and 0xFF)
+    buf[i] = uint8(i and 0xFF)
   return buf
 
 naganimInitModule("math_ext")

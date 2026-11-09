@@ -34,6 +34,10 @@ Create `example_ext.nim`:
 import std/[options, tables]
 import naganim
 
+proc scale_int*(x: int64, factor: int64): int64 {.exportpy.} =
+  ## Multiply `x` by `factor` (exported to both CPython abi3/abi3t and CFFI C-ABI).
+  result = x * factor
+
 proc compute_weighted_sum*(items: seq[int64], weight: int64): int64 {.exportpy.} =
   ## Compute the sum of `items` multiplied by `weight`.
   for x in items:
@@ -63,13 +67,14 @@ from naganim import load_abi3_extension, load_cffi_library
 
 # Load via CPython PEP 489 multi-phase initialization (abi3 / abi3t)
 mod = load_abi3_extension("example_ext", "dist/libexample_ext.dylib")
+assert mod.scale_int(7, 6) == 42
 assert mod.compute_weighted_sum([1, 2, 3, 4], 10) == 100
 assert mod.lookup_tag({"alpha": 7, "beta": 9}, "alpha") == 7
 assert mod.lookup_tag({"alpha": 7}, "missing") is None
 
 # Or load via CFFI ABI mode
 cffi_mod = load_cffi_library("dist/libexample_ext.dylib")
-assert cffi_mod.compute_weighted_sum == getattr(cffi_mod, "compute_weighted_sum", None) or True
+assert cffi_mod.scale_int(7, 6) == 42
 ```
 
 ---
@@ -85,13 +90,13 @@ from naganim import NaganimAsyncBridge, load_cffi_library
 async def main() -> None:
     cffi_mod = load_cffi_library("dist/libexample_ext.dylib")
     async with NaganimAsyncBridge(cffi_mod, num_workers=4) as bridge:
-        # Register a compute op callback (or invoke a native Nim registered op)
+        # Register a compute op callback (1 <= op_code <= 255)
         bridge.register_op(10, lambda a, b: a * a + b * b)
         result = await bridge.submit_compute(10, 3, 4)
         assert result == 25
 
         # Stream integers from Nim to Python via AsyncChannel
-        ch = bridge.create_channel(channel_id=1)
+        ch = bridge.create_channel()
         ch.push_from_nim(101)
         ch.push_from_nim(202)
         ch.close_from_nim()
