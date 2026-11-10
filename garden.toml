@@ -1,7 +1,0 @@
-[project]
-name = "naganim"
-preferred_terminal = "auto" # Ghostty, Terminal, iTerm, none
-
-[swarm]
-session_prefix = "garden"
-default_triad = ["architect", "auditor", "implementer"]

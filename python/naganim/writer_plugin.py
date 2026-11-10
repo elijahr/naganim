@@ -1,7 +1,7 @@
 """NaganimWriterPlugin: Full HeaderKit-powered Python stub (.pyi) and CFFI cdef generator.
 
 Integrates `headerkit` (`Header`, `Function`, `Parameter`, `Struct`, `Field`, `CType`,
-`Pointer`, `FunctionPointer`, `NimCleanupTransform`, `NimJsonDocEnricher`,
+`Pointer`, `FunctionPointer`, `NimBackend`, `clean_nim_c_unit`, `DocParserTransform`,
 `CffiWriter`, `PyiWriter`, `register_writer`, and `@hook`) with `naganim`'s
 `.naganim.ir.json` metadata and `nim c --header` output.
 """
@@ -14,14 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from headerkit import (
-    ChainedFilter,
     CType,
     Field,
     Function,
     FunctionPointer,
     Header,
-    NimCleanupTransform,
-    NimJsonDocEnricher,
+    NimBackend,
     Parameter,
     PipelineContext,
     Pointer,
@@ -29,6 +27,7 @@ from headerkit import (
     SourceUnit,
     Struct,
     WriterBackend,
+    clean_nim_c_unit,
     get_backend,
     hook,
     is_writer_available,
@@ -452,7 +451,7 @@ class NaganimWriterPlugin:
         )
 
     def build_jsondoc_entries(self) -> list[dict[str, Any]]:
-        """Convert `NaganimModuleIr` metadata into `NimJsonDocEnricher` entries."""
+        """Convert `NaganimModuleIr` metadata into `NimBackend` jsondoc enrichment entries."""
         entries: list[dict[str, Any]] = []
         for fn in self.ir.functions:
             param_names = [p.name for p in fn.params]
@@ -479,16 +478,13 @@ class NaganimWriterPlugin:
         return entries
 
     def _clean_and_enrich_unit(self, unit: SourceUnit) -> Header:
-        """Apply `NimCleanupTransform` and `NimJsonDocEnricher` via `ChainedFilter`."""
-        pipeline = ChainedFilter(
-            NimCleanupTransform(),
-            NimJsonDocEnricher(
-                jsondoc_path=self.jsondoc_path,
-                nim_source_path=self.nim_source_path,
-                entries=self.build_jsondoc_entries(),
-            ),
+        """Apply `clean_nim_c_unit` (Nim C-ABI cleanup, AST/jsondoc enrichment, and `DocParserTransform`)."""
+        enriched = clean_nim_c_unit(
+            unit,
+            nim_source_path=self.nim_source_path,
+            jsondoc_path=self.jsondoc_path,
+            jsondoc_entries=self.build_jsondoc_entries(),
         )
-        enriched = pipeline.transform(unit)
         return Header(path=enriched.path, declarations=list(enriched.declarations))
 
     def parse_and_clean_c_header(
@@ -496,7 +492,7 @@ class NaganimWriterPlugin:
         header_code: str | None = None,
         header_path: str | Path | None = None,
     ) -> Header:
-        """Parse a Nim `--header` C file with `headerkit`, clean with `NimCleanupTransform`, and enrich with `NimJsonDocEnricher`."""
+        """Parse a Nim `--header` C file with `headerkit`'s `NimBackend` and enrich with `DocParserTransform`."""
         resolved_path = Path(header_path) if header_path is not None else self.c_header_path
         code = header_code if header_code is not None else self.c_header_code
         if code is None and resolved_path is not None and resolved_path.is_file():
@@ -505,9 +501,8 @@ class NaganimWriterPlugin:
             return Header(path=str(resolved_path or f"{self.ir.module}.h"), declarations=[])
 
         filename = str(resolved_path.name) if resolved_path is not None else f"{self.ir.module}.h"
-        cleanup = NimCleanupTransform()
         base_inc_dirs = [str(resolved_path.parent)] if resolved_path is not None else []
-        inc, args, b_opts = cleanup.prepare_parse(code, filename, base_inc_dirs, [])
+        inc, args, b_opts = NimBackend.prepare_c_parse_args(code, filename, base_inc_dirs, [])
         parsed = _parse_with_headerkit_backends(
             code,
             filename,
@@ -518,7 +513,7 @@ class NaganimWriterPlugin:
         return self._clean_and_enrich_unit(parsed)
 
     def to_pyi_header(self) -> Header:
-        """Build a `headerkit.ir.Header` for the Python module interface and run `NimCleanupTransform` + `NimJsonDocEnricher`."""
+        """Build a `headerkit.ir.Header` for the Python module interface and enrich via `clean_nim_c_unit`."""
         decls: list[Any] = []
         for fn in self.ir.functions:
             params = [
@@ -541,7 +536,7 @@ class NaganimWriterPlugin:
         return self._clean_and_enrich_unit(raw_unit)
 
     def to_cffi_header(self) -> Header:
-        """Build a `headerkit.ir.Header` for the CFFI C-ABI surface and run `NimCleanupTransform` + `NimJsonDocEnricher`."""
+        """Build a `headerkit.ir.Header` for the CFFI C-ABI surface and enrich via `clean_nim_c_unit`."""
         decls: list[Any] = list(_build_base_runtime_declarations())
         known_names: set[str] = {
             getattr(d, "name", "") for d in decls if getattr(d, "name", None)

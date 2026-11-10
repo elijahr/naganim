@@ -1,5 +1,8 @@
 # Vine / Rhizo / Garden workspace metadata
 .envrc
+.garden/
+garden.toml
+vine.toml
 .vine.json
 *.lock
 .rhizo.*

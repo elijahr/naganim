@@ -9,6 +9,7 @@ srcDir        = "src"
 # Dependencies
 
 requires "nim >= 2.0.0"
+requires "lockfree >= 0.6.7"
 
 task testNim, "Run Nim unit and integration tests":
   exec "nim c -r tests/nim/test_naganim_all.nim"
