@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Holistic Adversarial Audit Remediations (`python/naganim/asyncio.py`, `src/naganim/asyncio.nim`, `src/naganim/abi.nim`, `python/naganim/writer_plugin.py`, `python/naganim/_cli.py`, `pyproject.toml`, `.gitignore`)**:
   - Unregistered CFFI compute callbacks in `NaganimAsyncBridge.close()` before clearing `_op_callbacks`, and released the GIL (`PyEval_SaveThread`/`PyEval_RestoreThread`) around `bridge.pool.sync()` and `bridge.pool.shutdown(wait = true)` in `destroyAsyncBridge` to prevent AB-BA GIL/TaskPool deadlocks.
   - Removed local `/Users/eek/Development/headerkit` paths from `pyproject.toml` (`[tool.uv.sources]`, `mypy_path`, `pythonpath`), prioritized `("libclang", "tree-sitter")` with explicit `RuntimeError` reporting in `NaganimWriterPlugin`, wrapped `nimcache_dir` in `tempfile.TemporaryDirectory` in `naganim build`, guarded `isFreeThreadedRuntime()` with `when sizeof(pointer) == 8`, and untracked local ceremony documents.
-- **HeaderKit `>=0.50.0` Dependency & Backend C-Prototype Parsing (`pyproject.toml`, `python/naganim/writer_plugin.py`, `python/naganim/__init__.py`)**:
-  - Updated `headerkit` dependency to `headerkit>=0.50.0` in `pyproject.toml` and `uv.lock`.
+- **HeaderKit `>=0.51.0` Dependency & Backend C-Prototype Parsing (`pyproject.toml`, `python/naganim/writer_plugin.py`, `python/naganim/__init__.py`)**:
+  - Updated `headerkit` dependency to `headerkit>=0.51.0` in `pyproject.toml` and `uv.lock`.
   - Replaced bespoke string-splitting `parse_c_type_expr` with `headerkit` backend C-prototype AST parsing (`_parse_c_function_prototypes`) and `Parameter.type_overrides` / `Function.return_type_overrides` on `NaganimWriterPlugin.to_pyi_header()`.
 - **3-State Atomic `NimMain()` Spin-Latch (`[NAG-CRIT-01]`, `src/naganim/lifecycle.nim`)**:
   - Replaced the boolean `exchange(true)` guard with a 3-state atomic latch (`0 = Uninit`, `1 = Initializing`, `2 = Ready`) with `compareExchange` and `cpuRelax()` spin-waiting so concurrent threads calling `naganim_init_runtime()` cannot execute Nim code before `NimMain()` finishes.

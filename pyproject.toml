@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "cffi>=1.16.0",
-    "headerkit>=0.50.0",
+    "headerkit>=0.51.0",
 ]
 
 [project.urls]
